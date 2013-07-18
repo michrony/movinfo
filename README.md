@@ -1,4 +1,8 @@
-usage: movinfo.py [-h] (-n | -u) [-l] path
+OS:             Win7
+
+Python Version: 2.7
+
+Usage: movinfo.py [-h] (-n | -u) [-l] path
 
 Create/update movie descriptor *.info.txt using info from Rotten Tomatoes,
 Netflix, IMDB/omdb, Rovi. Movie descriptor includes json and plain ASCII
