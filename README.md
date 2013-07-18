@@ -7,9 +7,11 @@ json part can be updates manually. Then ASCII part is compiled from json by -u
 option.
 
 positional arguments:
+
   path        Movie Descriptor(s) to process
 
 optional arguments:
+
   -h, --help  show this help message and exit
   
   -n          Create new descriptor(s) using DB info with 'name', 'year' as
