@@ -4,9 +4,13 @@
 # Version: 03/08/2013 - added checking review links
 # Version: 05/03/2013 - get Netflix info from freebase, Netflix API retired
 # Version: 05/08/2013 - added rovi API
+# Version: 04/17/2014 - descriptor format update, set desc file acc time to created
+# Version: 05/09/2014 - append *dscj.txt if there is one
+# Version: 05/12/2014 - introduced config file movinfo.json
 
 import sys, os, datetime, httplib2, urllib, re, json, copy
 import time, hashlib
+from datetime import datetime
 import argparse
 import glob, pprint
 from sets import Set
@@ -16,6 +20,7 @@ Create/update movie descriptor *.info.txt using info from Rotten Tomatoes, Netfl
 Movie descriptor includes json and plain ASCII parts, ASCII is built from json.
 After descriptor is created with -n option, json part can be updates manually. 
 Then ASCII part is compiled from json by -u option.
+NOTE: Web service keys are kept in movinfo.json.
 '''
 #----------------------------------------------------------------------------------------------------
 # all symbols after x'80' => HTML encoding $#xxx;
@@ -31,7 +36,7 @@ def utf8(latin1):
 
       return Res
 #----------------------------------------------------------------------------------------------------
-# Check whether y1 from the response matches with y2 in the descriptor
+# Check if y1 from the response matches with y2 in the descriptor
 # y1 can be int or string
 # y2 can be int or list of ints: 2000 or [2000, 2005, 2010]
 # y1 matches OK if abs(y1-y2)=0
@@ -109,12 +114,12 @@ def roviget(IN):
 
  timestamp = int(time.time())
  m = hashlib.md5()
- m.update(ROVI_SEARCH_KEY)
- m.update(ROVI_SEARCH_SECRET)
+ m.update(cfg["ROVI_SEARCH_KEY"])
+ m.update(cfg["ROVI_SEARCH_SECRET"])
  m.update(str(timestamp))
  SIG = m.hexdigest()
 
- api_url_parm = api_url_parm % (IN["name"], ROVI_SEARCH_KEY, SIG)
+ api_url_parm = api_url_parm % (IN["name"], cfg["ROVI_SEARCH_KEY"], SIG)
  url = api_url + api_url_parm
  #url = urllib.quote(url)
  #print url
@@ -146,7 +151,10 @@ def roviget(IN):
    for el in item["directors"]:
      director = ", " + el["name"]
    director = director[2:]
-   synopsis = "%s - By %s" % (item["synopsis"]["text"], item["synopsis"]["author"])
+   try:         
+      synopsis = "%s - By %s" % (item["synopsis"]["text"], item["synopsis"]["author"])
+   except:
+      synopsis = ""
    synopsis = synopsis.replace("[", "<") # get rid of [...] elements
    synopsis = synopsis.replace("]", ">")
    p = re.compile("<[^>]+>")
@@ -253,7 +261,7 @@ def rottget(IN):
  REQ   = "http://api.rottentomatoes.com/api/public/v1.0/movies.json?apikey=%s&q=%s"
 
  # get movie id by movie name, 
- myREQ = REQ % (ROTT_API_KEY, urllib.quote(name))
+ myREQ = REQ % (cfg["ROTT_API_KEY"], urllib.quote(name))
  #print myREQ 
  try: resp, res = httplib2.Http().request(myREQ)
  except: 
@@ -283,7 +291,7 @@ def rottget(IN):
  
  # get movie info including director by movie id
  REQ   = "http://api.rottentomatoes.com/api/public/v1.0/movies/%s.json?apikey=%s"
- myREQ = REQ % (curr["id"], ROTT_API_KEY)
+ myREQ = REQ % (curr["id"], cfg["ROTT_API_KEY"])
  resp, res = httplib2.Http().request(myREQ)
  res = json.loads(res)
  #print "=>" + res["title"]
@@ -309,7 +317,7 @@ def rottget(IN):
  OUT = copy.deepcopy(IN)
  if ("abridged_cast" in res and len(res["abridged_cast"])>0):
     OUT["cast"] = copy.deepcopy(rottgetcast(res["abridged_cast"]))
- reviews = rottgetreviews(id, ROTT_API_KEY)
+ reviews = rottgetreviews(id, cfg["ROTT_API_KEY"])
  if (len(reviews)>0): OUT["urlrev"] = copy.deepcopy(reviews)
  if (not "director" in OUT and director!=""): OUT["director"] = director
  if (not "synopsis" in OUT and synopsis!=""): OUT["synopsis"] = synopsis
@@ -380,16 +388,19 @@ def checkLists(IN, new):
 # Descriptor in the file fname => IN dictionary
 def getDesc(fname, new):
 
- p1 = re.compile("<!--info[\s]*{")
- p2 = re.compile("}[\s]*-->")
  try:
    F   = open(fname)
-   F_  = F.read()
-   F_  = p1.sub("{", F_) # clean json from its envelope
-   F_  = p2.split(F_)[0]
-   if (not F_.strip().endswith("}")): F_ = F_ + "}"
-   IN  = json.loads(F_)
+   F_  = " " + F.read() + " "
+   # get json descriptor
+   if ("<!--info" in F_): 
+      F_  = F_.split("<!--info")
+      if ("-->" in F_[1]): F_ = F_[1].split("-->")
+      else:                F_ = F_[1].split("->")
+   else: F_ = [F_]
+   IN  = json.loads(F_[0])
    F.close()
+   #print IN
+   #exit
  except:
    print "movinfo: Wrong JSON in %s" % fname
    return {}
@@ -418,7 +429,7 @@ def putDesc(fname, IN):
 
  HeaderYear = IN["year"]
  if (HeaderYear.__class__.__name__ == "list"): HeaderYear = HeaderYear[0]
- Header = "%s (%s)\n" % (IN["name"], HeaderYear)
+ Header = "%s (%s)" % (IN["name"], HeaderYear)
  INkeys = INkeys - Set(["name", "year"])
 
  dir = "" # director
@@ -439,7 +450,7 @@ def putDesc(fname, IN):
  INkeys = INkeys - Set(["urlnetf"])
 
  imdb = "" # IMDB link
- if ("urlimdb" in IN): imdb = IN["urlimdb"] + "\n"
+ if ("urlimdb" in IN): imdb = IN["urlimdb"]
  INkeys = INkeys - Set(["urlimdb"])
 
  cast = ""
@@ -476,7 +487,19 @@ def putDesc(fname, IN):
         else:              you = "%s%s\n" % (you, el[1])
  INkeys = INkeys - Set(["urlyou"])
 
- IN_ = "<!--info\n" + json.dumps(IN, indent=1) + "\n-->\n" + Header + dir + syn + cast + "<b>Links</b>\n" + wik + rott + netf + rev + you + imdb
+ IN_ = "<!-%s %s %s->\n" % (IN["created"], Header, imdb.replace("http://", "")) 
+ IN_ = IN_ + dir + syn + cast + "<b>Links</b>\n" + wik + rott + netf + rev + you
+ IN_ = IN_ + "<!--info\n%s-->\n" % (json.dumps(IN, indent=1))
+
+ # append *dscj.txt if there is one
+ fdscj = fname.replace("info.txt", "dscj.txt")
+ if (os.path.exists(fdscj)):
+    try: 
+     F   = open(fdscj)
+     IN_ = IN_ + F.read()
+    except Exception, err: pass
+
+ # write the prepared descriptor to *info.txt
  F   = open(fname, "w")
  codecFail = False
  try: F.write(IN_)
@@ -485,6 +508,14 @@ def putDesc(fname, IN):
  if (codecFail):  
     F.write(utf8(IN_)) 
  F.close()
+
+ # set access time to created
+ cr = IN["created"].split("-")
+ if len(cr)>0:
+    [y, m, d] = [int(cr[0]), int(cr[1]), int(cr[2])]
+    t = datetime(y, m, d)
+    t = time.mktime(t.timetuple())
+    os.utime(fname, (t, t))
 
  # Check unusable entries
  unused = list(INkeys - Set(["idnetf", "idrott", "idrovi", "created", "urlrevrm"]))
@@ -503,7 +534,7 @@ def procDesc(fname, newDesc, linkCheck):
  year = Res["year"]
  if (newDesc):
     if (not "created" in Res):
-       now = datetime.datetime.now()
+       now = time
        Res["created"] = now.strftime("%Y-%m-%d")
     Res = rottget(Res)
     Res = omdbget(Res)
@@ -514,10 +545,32 @@ def procDesc(fname, newDesc, linkCheck):
 
  return
 #----------------------------------------------------------------------------------------------------
-ROTT_API_KEY       = "w7npxnqxgfdakscmnrsd7ad8"
+cfg = {} 
+def getCfg():
+  
+  global cfg
+ 
+  fn = os.path.dirname(sys.argv[0]).replace("\\", "/") + "/movinfo.json"
+  if (not os.path.exists(fn)):
+       print "movinfo: %s does not exist" % (fn)  
+       exit()
+  try:
+       cfg = json.loads(open(fn).read())
+  except Exception, e:
+       print "movinfo: wrong JSON in %s" % (fn)
+       exit() 
+  print "movinfo: use %s\n" % (fn)
 
-ROVI_SEARCH_KEY    = "zvjyn8e25apxk5vfbjjqsekx"
-ROVI_SEARCH_SECRET = "6XSsQC85sn"
+  #print cfg
+  issues = []
+  if ("ROTT_API_KEY" not in cfg):       issues.append("ROTT_API_KEY")
+  if ("ROVI_SEARCH_KEY" not in cfg):    issues.append("ROVI_SEARCH_KEY")
+  if ("ROVI_SEARCH_SECRET" not in cfg): issues.append("ROVI_SEARCH_SECRET")
+  if (len(issues)>0):
+      print "movinfo: missing %s" % (str(issues))
+      exit()
+ 
+  return
 #----------------------------------------------------------------------------------------------------
 
 parser = argparse.ArgumentParser(description=help)
@@ -530,8 +583,10 @@ args      = vars(parser.parse_args())
 new       = args["n"]
 linkCheck = args["l"]
 
+getCfg()
+
 fname = args["path"]
-print "movinfo: %s new=%s" % (fname, new)
+#print "movinfo: %s new=%s" % (fname, new)
 if (fname.find("*")<0 and fname.endswith(".info.txt") and os.path.exists(fname)):
    procDesc(fname, new) 
    exit() 
