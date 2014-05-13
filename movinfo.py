@@ -8,6 +8,9 @@
 # Version: 05/09/2014 - append *dscj.txt if there is one
 # Version: 05/12/2014 - introduced config file movinfo.json
 
+# Rotten Tomatoes API: https://secure.mashery.com/login/developer.rottentomatoes.com/
+# Rovi Metadata and Search API: https://secure.mashery.com/login/developer.rovicorp.com/
+
 import sys, os, datetime, httplib2, urllib, re, json, copy
 import time, hashlib
 from datetime import datetime
