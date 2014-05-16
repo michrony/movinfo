@@ -7,16 +7,20 @@
 # Version: 04/17/2014 - descriptor format update, set desc file acc time to created
 # Version: 05/09/2014 - append *dscj.txt if there is one
 # Version: 05/12/2014 - introduced config file movinfo.json
+#                       introduced netfgethtm to get Netflix info using html from Netflix dvd search 
+# Version: 05/15/2014 - introduced comments removal by rmComments()
 
 # Rotten Tomatoes API: https://secure.mashery.com/login/developer.rottentomatoes.com/
 # Rovi Metadata and Search API: https://secure.mashery.com/login/developer.rovicorp.com/
 
 import sys, os, datetime, httplib2, urllib, re, json, copy
+import urllib2
+import cookielib
 import time, hashlib
 from datetime import datetime
-import argparse
-import glob, pprint
+import argparse, glob
 from sets import Set
+import pprint, textwrap
 
 help = '''
 Create/update movie descriptor *.info.txt using info from Rotten Tomatoes, Netflix, IMDB/omdb, Rovi.
@@ -184,6 +188,65 @@ def roviget(IN):
  if ("synopsis" in IN):   ldir = len(IN["synopsis"])
  if (len(synopsis)>lsyn): IN["synopsis"] = synopsis
 
+ return IN
+#----------------------------------------------------------------------------------------------------
+# get Netflix URL using html from Netflix search
+def netfgethtm(IN):
+
+ years = IN["year"]
+ if (years.__class__.__name__ != "list"):
+     years = [years]
+ for y in years:
+     if ("urlnetf" in IN): return IN
+     IN["year"] = int(y)
+     IN = netfgethtm_(IN)
+
+ return IN
+#----------------------------------------------------------------------------------------------------
+def netfgethtm_(IN):
+
+ parm = ("%s %d" %(IN["name"], IN["year"])).replace(" ", "+")
+ req  = "http://dvd.netflix.com/Search?v1=" + parm
+
+ resp = ""
+ try: 
+      jar = cookielib.FileCookieJar("cookies") # allow Netflix cookies
+      opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(jar))
+      resp = opener.open(req).read()
+ except Exception, e:
+      print "netfgethtm: GET failed " + str(e.args)
+      return IN
+
+ # split response to <li> items 
+ resp = resp.split("<li style=") 
+ resp.pop(0)
+ last = resp[-1].split("</ol>")[0]
+ resp[-1] = last
+ 
+ found = ""
+ for el in resp:
+    #print textwrap.fill(el, 60)
+    el_ = el.lower()
+    if (el_.find(IN["name"].lower())<0): continue
+    year = el.split("<span class=\"year\">")[1]
+    year = int(year.split("</span")[0]) 
+    if (year != IN["year"]): 
+       print "netfgethtm: searching for %d, %d is rejected" % (IN["year"], year)
+       #print textwrap.fill(el, 60)
+       continue 
+
+    print "netfgethtm: searching for %d, found %d" % (IN["year"], IN["year"])
+    found = el
+    break
+ if (found==""):
+    print "netfgethtm: nothing found for " + req
+    return IN 
+ 
+ #print textwrap.fill(found, 60)
+ found = found.split("<a href=\"")[1]
+ found = found.split("?")[0]
+ IN["urlnetf"] = found
+ 
  return IN
 #----------------------------------------------------------------------------------------------------
 # get Netflix URL, director from freebase by IMDB URL
@@ -357,36 +420,63 @@ def checkLinks(IN):
     IN["urlrevrm"] = tmp
  return IN
 #----------------------------------------------------------------------------------------------------
-# Check that certain items are lists of [string, string] pairs
-def checkLists(IN, new):
+# Check that certain entries are in IN and have proper format
+def checkEntries(IN, new):
 
- OK = True
  unfilled = []
+ for el in ["urlnetf", "urlrott", "idrovi"]:
+    if (not el in IN): 
+       unfilled.append(el)
+     
+ OK = True
+ # Check that these are lists of [string, string] pairs
  for el in ["urlwik", "urlyou", "urlrev", "cast"]:
     if (not el in IN): 
        unfilled.append(el)
        continue
     if (not IN[el].__class__.__name__=="list"):
-       print "movinfo.checkLists: Wrong %s" % (el)
+       print "movinfo.checkEntries: Wrong %s" % (el)
        pprint.pprint(In[el])
        OK = False
        continue
     for el_ in IN[el]:
         if (not el_.__class__.__name__=="list"):
-           print "movinfo.checkLists: Wrong %s" % (el)
+           print "movinfo.checkEntries: Wrong %s" % (el)
            pprint.pprint(el_)
            OK = False
            continue
         if (not len(el_)==2 or el_[0].__class__.__name__!="str" or el_[1].__class__.__name__!="str"):
-           print "movinfo.checkLists: Wrong %s" % (el)
+           print "movinfo.checkEntries: Wrong %s" % (el)
            pprint.pprint(el_)
            OK = False
            continue
 
  unfilled.sort()
- if (len(unfilled)>0 and not new): print "movinfo: Warning. Unfilled entries %s" % (unfilled) 
+ if (len(unfilled)>0 and not new): print "movinfo: Warning. Missing/wrong entries %s" % (unfilled) 
 
  return OK
+#----------------------------------------------------------------------------------------------------
+# remove commented entries ["#xxx", "yyy"]
+def rmComments(IN):
+
+ for el in IN.keys(): # remove commented entries of the 1st level
+     if (el!="" and el[0]=="#"): del IN[el]
+      
+ for el in ["cast", "urlwik", "urlrev"]:
+     if el not in IN: continue   
+     out = []
+     comm = False
+     for item in IN[el]:
+        if (item[0]!="" and item[0][0]=="#"): comm = True
+        if (item[0]=="" or item[0][0]!="#"):  out.append(item)
+      
+     if (not comm): continue
+     if (len(out)==0): 
+        del IN[el]
+        continue  
+     IN[el] = out 
+
+ return IN
 #----------------------------------------------------------------------------------------------------
 # Descriptor in the file fname => IN dictionary
 def getDesc(fname, new):
@@ -411,8 +501,9 @@ def getDesc(fname, new):
    print "movinfo: No movie name/year in %s" % fname
    return {}
  
- OK = checkLists(IN, new)
+ OK = checkEntries(IN, new)
  if (not OK): return []
+ if (not new): IN = rmComments(IN)
 
  return IN
 #----------------------------------------------------------------------------------------------------
@@ -449,7 +540,7 @@ def putDesc(fname, IN):
  INkeys = INkeys - Set(["urlrott"])
 
  netf = "" # Netflix link
- if ("urlnetf" in IN): netf = IN["urlnetf"] + "\n"
+ if ("urlnetf" in IN and IN["urlnetf"]!=""): netf = IN["urlnetf"] + "\n"
  INkeys = INkeys - Set(["urlnetf"])
 
  imdb = "" # IMDB link
@@ -521,7 +612,7 @@ def putDesc(fname, IN):
     os.utime(fname, (t, t))
 
  # Check unusable entries
- unused = list(INkeys - Set(["idnetf", "idrott", "idrovi", "created", "urlrevrm"]))
+ unused = list(INkeys - Set(["idrott", "idrovi", "created", "urlrevrm"]))
  if (len(unused)>0):   print "movinfo: Warning. Unusable entries %s" % (unused) 
  if ("created" in IN): print "movinfo: Created %s\n" % (IN["created"])
 
@@ -541,8 +632,11 @@ def procDesc(fname, newDesc, linkCheck):
        Res["created"] = now.strftime("%Y-%m-%d")
     Res = rottget(Res)
     Res = omdbget(Res)
+    Res = netfgethtm(Res)
     Res = netfget(Res)
     Res = roviget(Res)
+ else: Res = netfget(netfgethtm(Res)) # try to add Netflix info to older descriptors
+    
  if (linkCheck): Res = checkLinks(Res)
  putDesc(fname, Res)
 
