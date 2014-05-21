@@ -423,6 +423,16 @@ def checkLinks(IN):
 # Check that certain entries are in IN and have proper format
 def checkEntries(IN, new):
 
+ if (new):
+    allowed = Set(["created", "year", "name", "urlwik"])
+    present = Set(IN.keys())
+    extras  = present - allowed
+    if (len(extras)>0):
+       extras = list(extras)
+       extras.sort() 
+       print "movinfo.checkEntries: entries not allowed for new: " + str(extras)
+       return False
+ 
  unfilled = []
  for el in ["urlnetf", "urlrott", "idrovi"]:
     if (not el in IN): 
@@ -436,7 +446,7 @@ def checkEntries(IN, new):
        continue
     if (not IN[el].__class__.__name__=="list"):
        print "movinfo.checkEntries: Wrong %s" % (el)
-       pprint.pprint(In[el])
+       #pprint.pprint(In[el])
        OK = False
        continue
     for el_ in IN[el]:
@@ -581,6 +591,7 @@ def putDesc(fname, IN):
         else:              you = "%s%s\n" % (you, el[1])
  INkeys = INkeys - Set(["urlyou"])
 
+ if ("created" not in IN): IN["created"] = ""
  IN_ = "<!-%s %s %s->\n" % (IN["created"], Header, imdb.replace("http://", "")) 
  IN_ = IN_ + dir + syn + cast + "<b>Links</b>\n" + wik + rott + netf + rev + you
  IN_ = IN_ + "<!--info\n%s-->\n" % (json.dumps(IN, indent=1))
@@ -605,7 +616,7 @@ def putDesc(fname, IN):
 
  # set access time to created
  cr = IN["created"].split("-")
- if len(cr)>0:
+ if len(cr)>1:
     [y, m, d] = [int(cr[0]), int(cr[1]), int(cr[2])]
     t = datetime(y, m, d)
     t = time.mktime(t.timetuple())
@@ -614,7 +625,7 @@ def putDesc(fname, IN):
  # Check unusable entries
  unused = list(INkeys - Set(["idrott", "idrovi", "created", "urlrevrm"]))
  if (len(unused)>0):   print "movinfo: Warning. Unusable entries %s" % (unused) 
- if ("created" in IN): print "movinfo: Created %s\n" % (IN["created"])
+ if ("created" in IN): print "movinfo: Created(%s)\n" % (IN["created"])
 
  return
 #----------------------------------------------------------------------------------------------------
@@ -622,7 +633,7 @@ def putDesc(fname, IN):
 # if newDesc=False, update Movie Descriptor using its updated json Descriptor 
 def procDesc(fname, newDesc, linkCheck):
  
- Res = getDesc(fname, new)
+ Res = getDesc(fname, newDesc)
  if (not "name" in Res or not "year" in Res): return
  name = Res["name"]
  year = Res["year"]
@@ -669,33 +680,36 @@ def getCfg():
  
   return
 #----------------------------------------------------------------------------------------------------
+def main():
+  parser = argparse.ArgumentParser(description=help)
+  group  = parser.add_mutually_exclusive_group(required=True)
+  group.add_argument('-n', action="store_true", help="Create new descriptor(s) using DB info with 'name', 'year' as movie seach arguments")
+  group.add_argument('-u', action="store_true", help="Update existing")
+  parser.add_argument("-l", action="store_true", help="Check links for reviews")
+  parser.add_argument("path", type = str, help="Movie Descriptor(s) to process")
+  args      = vars(parser.parse_args())
+  new       = args["n"]
+  linkCheck = args["l"]
+  
+  getCfg()
+  
+  fname = args["path"]
+  #print "movinfo: %s new=%s" % (fname, new)
+  if (fname.find("*")<0 and fname.endswith(".info.txt") and os.path.exists(fname)):
+     procDesc(fname, new) 
+     exit() 
+  
+  List = glob.glob(args["path"])
+  List = [el for el in List if (el.endswith(".info.txt"))] # use only *.info.txt files
+  if (len(List)==0):
+     print "movinfo: Nothing to process"
+     exit()
+  
+  for el in List:
+     print "movinfo: %s new=%s" % (el, new)
+     procDesc(el, new, linkCheck) 
 
-parser = argparse.ArgumentParser(description=help)
-group  = parser.add_mutually_exclusive_group(required=True)
-group.add_argument('-n', action="store_true", help="Create new descriptor(s) using DB info with 'name', 'year' as movie seach arguments")
-group.add_argument('-u', action="store_true", help="Update existing")
-parser.add_argument("-l", action="store_true", help="Check links for reviews")
-parser.add_argument("path", type = str, help="Movie Descriptor(s) to process")
-args      = vars(parser.parse_args())
-new       = args["n"]
-linkCheck = args["l"]
-
-getCfg()
-
-fname = args["path"]
-#print "movinfo: %s new=%s" % (fname, new)
-if (fname.find("*")<0 and fname.endswith(".info.txt") and os.path.exists(fname)):
-   procDesc(fname, new) 
-   exit() 
-
-List = glob.glob(args["path"])
-List = [el for el in List if (el.endswith(".info.txt"))] # use only *.info.txt files
-if (len(List)==0):
-   print "movinfo: Nothing to process"
-   exit()
-
-for el in List:
-   print "movinfo: %s new=%s" % (el, new)
-   procDesc(el, new, linkCheck) 
-
+  return
+#----------------------------------------------------------------------------------------------------
+if __name__=="__main__": main()
 exit()
