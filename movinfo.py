@@ -8,12 +8,14 @@
 # Version: 05/09/2014 - append *dscj.txt if there is one
 # Version: 05/12/2014 - introduced config file movinfo.json
 #                       introduced netfgethtm to get Netflix info using html from Netflix dvd search 
-# Version: 05/15/2014 - introduced comments removal by rmComments()
+# Version: 05/15/2014 - introduced removal of #-commented entries by rmComments()
+# Version: 06/08/2014 - introduced -n with removing and replacing of old entries
 
 # Rotten Tomatoes API: https://secure.mashery.com/login/developer.rottentomatoes.com/
 # Rovi Metadata and Search API: https://secure.mashery.com/login/developer.rovicorp.com/
 
 import sys, os, datetime, httplib2, urllib, re, json, copy
+import shutil
 import urllib2
 import cookielib
 import time, hashlib
@@ -330,16 +332,19 @@ def rottget(IN):
  myREQ = REQ % (cfg["ROTT_API_KEY"], urllib.quote(name))
  #print myREQ 
  try: resp, res = httplib2.Http().request(myREQ)
- except: 
-      print "rottget: GET failed for %s" % (name)
+ except E: 
+      err = str(E.args)
+      print "rottget: GET failed for %s - %s" % (name. err)
       return IN
 
  try: 
    res  = json.loads(res)
-   res  = res["movies"]
-   #pprint.pprint(res)
+   if ("movies" in res): res  = res["movies"]
+   else: 
+      print "rottget: Wrong response for %s - %s" % (name, str(res))
+      return IN
  except: 
-   print "rottget: Wrong response for %s" % (name)
+   print "rottget: Wrong json in response for %s" % (name)
    return IN
 
  if (len(res)==0): 
@@ -424,15 +429,15 @@ def checkLinks(IN):
 def checkEntries(IN, new):
 
  if (new):
-    allowed = Set(["created", "year", "name", "urlwik"])
+    allowed = Set(["created", "year", "name", "urlwik", "urlnetf", "urlimdb"])
     present = Set(IN.keys())
     extras  = present - allowed
     if (len(extras)>0):
        extras = list(extras)
        extras.sort() 
-       print "movinfo.checkEntries: entries not allowed for new: " + str(extras)
-       return False
- 
+       print "movinfo.checkEntries: entries not allowed for new and removed: " + str(extras)
+       for el in extras:del IN[el]
+           
  unfilled = []
  for el in ["urlnetf", "urlrott", "idrovi"]:
     if (not el in IN): 
@@ -464,7 +469,7 @@ def checkEntries(IN, new):
  unfilled.sort()
  if (len(unfilled)>0 and not new): print "movinfo: Warning. Missing/wrong entries %s" % (unfilled) 
 
- return OK
+ return [OK, IN]
 #----------------------------------------------------------------------------------------------------
 # remove commented entries ["#xxx", "yyy"]
 def rmComments(IN):
@@ -511,7 +516,7 @@ def getDesc(fname, new):
    print "movinfo: No movie name/year in %s" % fname
    return {}
  
- OK = checkEntries(IN, new)
+ [OK, IN] = checkEntries(IN, new)
  if (not OK): return []
  if (not new): IN = rmComments(IN)
 
@@ -629,7 +634,7 @@ def putDesc(fname, IN):
 
  return
 #----------------------------------------------------------------------------------------------------
-# if newDesc=True,  create new Movie Descriptor using info from Rotten Tomatoes, Netflix, IMDB/omdb
+# if newDesc=True,  create new Movie Descriptor using info from Rotten Tomatoes, Netflix, IMDB/omdb, Rovi
 # if newDesc=False, update Movie Descriptor using its updated json Descriptor 
 def procDesc(fname, newDesc, linkCheck):
  
@@ -638,6 +643,11 @@ def procDesc(fname, newDesc, linkCheck):
  name = Res["name"]
  year = Res["year"]
  if (newDesc):
+    try: 
+       fnamebak = fname.replace(".txt", ".bak")
+       shutil.copy2(fname, fnamebak)
+    except Exception, err:
+       print "movinfo: Failed to create " + fnamebak
     if (not "created" in Res):
        now = time
        Res["created"] = now.strftime("%Y-%m-%d")
