@@ -10,19 +10,30 @@
 #                       introduced netfgethtm to get Netflix info using html from Netflix dvd search 
 # Version: 05/15/2014 - introduced removal of #-commented entries by rmComments()
 # Version: 06/08/2014 - introduced -n with removing and replacing of old entries
+# Version: 12/08/2014 - fixed rovigetcast bug
+# Version: 09/13/2015 - reworked netfgethtm using beatifulsoup and xmltodict
 
 # Rotten Tomatoes API: https://secure.mashery.com/login/developer.rottentomatoes.com/
 # Rovi Metadata and Search API: https://secure.mashery.com/login/developer.rovicorp.com/
 
-import sys, os, datetime, httplib2, urllib, re, json, copy
+import sys, os, datetime, urllib, re, json, copy
 import shutil
+import httplib2 
+import xmltodict
+from bs4 import BeautifulSoup
 import urllib2
 import cookielib
 import time, hashlib
 from datetime import datetime
 import argparse, glob
 from sets import Set
-import pprint, textwrap
+import pprint
+#import textwrap
+
+# For ActivePython run:
+# pypm install httplib2
+# pypm install xmltodict
+# pip install beautifulsoup4
 
 help = '''
 Create/update movie descriptor *.info.txt using info from Rotten Tomatoes, Netflix, IMDB/omdb, Rovi.
@@ -156,10 +167,13 @@ def roviget(IN):
        print "rovget: Wrong year %s" % (item["releaseYear"])
        return IN
    id = [item["ids"]["cosmoId"], item["ids"]["movieId"]]
-   cast = rovigetcast(item["cast"])
    for el in item["directors"]:
      director = ", " + el["name"]
    director = director[2:]
+   try:         
+      cast = rovigetcast(item["cast"])
+   except:
+      cast = []
    try:         
       synopsis = "%s - By %s" % (item["synopsis"]["text"], item["synopsis"]["author"])
    except:
@@ -219,36 +233,53 @@ def netfgethtm_(IN):
       print "netfgethtm: GET failed " + str(e.args)
       return IN
 
- # split response to <li> items 
- resp = resp.split("<li style=") 
- resp.pop(0)
- last = resp[-1].split("</ol>")[0]
- resp[-1] = last
- 
- found = ""
+ resp = BeautifulSoup(resp, 'lxml')
+ resp = resp.find_all("ol")
+ if len(resp)>0: resp = str(resp[0])
+ else: 
+    print "netfgethtm: empty response"
+    return IN
+
+ resp = xmltodict.parse(resp)
+ resp = json.loads(json.dumps(resp)) # get rid of ordered dicts
+ #print json.dumps(resp, indent=1)
+ try: resp = resp["ol"]["li"]
+ except:
+    print "netfgethtm: wrong response"
+    return IN
+    
+ #print json.dumps(resp, indent=1)
+ [year, name, url] = ["", "", ""]
  for el in resp:
-    #print textwrap.fill(el, 60)
-    el_ = el.lower()
-    if (el_.find(IN["name"].lower())<0): continue
-    year = el.split("<span class=\"year\">")[1]
-    year = int(year.split("</span")[0]) 
+    try:
+        year = el["div"][1]["span"][0]["#text"]
+        name = el["div"][1]["h2"]["span"]["a"]["#text"]
+        url  = el["div"][1]["h2"]["span"]["a"]["@href"]
+        year = int(year)
+        #print name + " " + str(year) + " " + url
+    except:
+        print "netfgethtm: wrong response name: %s year: %s url: %s" % (name, year, url)
+        return IN
+    if (not IN["name"].lower() in name.lower()): 
+       [year, name, url] = ["", "", ""]
+       continue
+
+    #print name + " " + str(year) + " " + url
     if (year != IN["year"]): 
        print "netfgethtm: searching for %d, %d is rejected" % (IN["year"], year)
-       #print textwrap.fill(el, 60)
+       [year, name, url] = ["", "", ""]
        continue 
 
-    print "netfgethtm: searching for %d, found %d" % (IN["year"], IN["year"])
-    found = el
     break
- if (found==""):
-    print "netfgethtm: nothing found for " + req
-    return IN 
- 
- #print textwrap.fill(found, 60)
- found = found.split("<a href=\"")[1]
- found = found.split("?")[0]
- IN["urlnetf"] = found
- 
+  
+ if (url==""):
+       print "netfgethtm: nothing found"
+       return IN 
+     
+ print "netfgethtm: found: " + name + " " + str(year) + " " + url
+ IN["urlnetf"] = url
+ IN["name"]    = name
+
  return IN
 #----------------------------------------------------------------------------------------------------
 # get Netflix URL, director from freebase by IMDB URL
@@ -268,7 +299,9 @@ def netfget(IN):
            'query': json.dumps(query)
  }
  url = 'https://www.googleapis.com/freebase/v1/mqlread/?' + urllib.urlencode(params)
- response = json.loads(urllib.urlopen(url).read())
+ response = {}
+ try: response = json.loads(urllib.urlopen(url).read())
+ except: print "netfget: Failed to get response"
  urlnetfid = ""
  urlnetf   = ""
  director  = ""
@@ -546,7 +579,7 @@ def putDesc(fname, IN):
  INkeys = INkeys - Set(["director"])
 
  syn = "" # synopsis
- if ("synopsis" in IN): syn = "<b>Synopis:</b> %s\n" % (IN["synopsis"])
+ if ("synopsis" in IN): syn = "<b>Synopsis:</b> %s\n" % (IN["synopsis"])
  syn = procAtag(syn)
  INkeys = INkeys - Set(["synopsis"])
 
@@ -651,10 +684,10 @@ def procDesc(fname, newDesc, linkCheck):
     if (not "created" in Res):
        now = time
        Res["created"] = now.strftime("%Y-%m-%d")
-    Res = rottget(Res)
-    Res = omdbget(Res)
     Res = netfgethtm(Res)
     Res = netfget(Res)
+    Res = rottget(Res)
+    Res = omdbget(Res)
     Res = roviget(Res)
  else: Res = netfget(netfgethtm(Res)) # try to add Netflix info to older descriptors
     
