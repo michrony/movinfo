@@ -1,5 +1,6 @@
 {
-   "ROTT_API_KEY" : "",
+   "ROTT_API_KEY" : "retired",
    "ROVI_SEARCH_KEY" : "",
-   "ROVI_SEARCH_SECRET" : ""
+   "ROVI_SEARCH_SECRET" : "",
+   "OMDB_API_KEY" : ""
 }
