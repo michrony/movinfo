@@ -1,3 +1,5 @@
+#!/usr/bin/python
+
 # Version: 02/13/2013 - initial creation
 # Version: 02/18/2013 - introduced descriptor processing and CLI
 # Version: 02/26/2013 - added items check
@@ -12,11 +14,17 @@
 # Version: 06/08/2014 - introduced -n with removing and replacing of old entries
 # Version: 12/08/2014 - fixed rovigetcast bug
 # Version: 09/13/2015 - reworked netfgethtm using beatifulsoup and xmltodict
-# Version: 07/30/2017 - added -ue. Now only -ue produces envelope around json desc in *.info.txt
-#                       To simplify corecting JSON syntax, -n, -u produce pure JSON in *.info.txt
+# Version: 07/30/2017 - added -ue. Now -ue produces envelope around json desc in *.info.txt
+#                       To simplify correcting JSON syntax, -n, -u produce pure JSON in *.info.txt
 # Version: 08/13/2017 - added OMDB API key
+# Version: 12/25/2017 - minor fix of checkEntries
+# Version: 06/03/2018 - minor fix to enable https://imdb.com
+# Version: 06/25/2018 - added placeholders to missing keys 
+# Version: 07/07/2018 - removed all about Netflix, Rotten APIs   
+# Version: 08/06/2018 - path arg retired
+#                       added setDesc() to use pre-existing *.info.txt or create a new one
+#                       create empty *dscj.txt if it does not exist
 
-# Rotten Tomatoes API: https://secure.mashery.com/login/developer.rottentomatoes.com/
 # Rovi Metadata and Search API: https://secure.mashery.com/login/developer.rovicorp.com/
 # OMDB API: http://www.omdbapi.com/ https://www.patreon.com/bePatron?c=740003
 
@@ -24,7 +32,7 @@ import sys, os, datetime, urllib, re, json, copy
 import shutil
 import httplib2 
 import xmltodict
-from bs4 import BeautifulSoup
+#from bs4 import BeautifulSoup
 import urllib2
 import cookielib
 import time, hashlib
@@ -34,14 +42,14 @@ from sets import Set
 import pprint
 #import textwrap
 
-# For ActivePython run:
+# For Win/ActivePython, CentOS run:
 # pip install httplib2
 # pip install xmltodict
 # pip install beautifulsoup4
-# lxml-3.4.4.win32-py2.7.exe from https://pypi.python.org/pypi/lxml/3.4.4
+# lxml-3.4.4.win32-py2.7.exe from https://pypi.python.org/pypi/lxml/3.4.4 - Win olnly
 
 help = '''
-Create/update movie descriptor *.info.txt using info from Rotten Tomatoes, Netflix, IMDB/omdb, Rovi.
+Create/update movie descriptor *.info.txt using info from Rotten Tomatoes, IMDB/omdb, Rovi.
 Movie descriptor includes json and ASCII envelop, envelope is built from json.
 After descriptor is created with -n option, json part can be updated manually. 
 Then ASCII envelope is compiled from json by -ue option.
@@ -219,233 +227,6 @@ def roviget(IN):
 
  return IN
 #----------------------------------------------------------------------------------------------------
-# get Netflix URL using html from Netflix search
-def netfgethtm(IN):
-
- years = IN["year"]
- if (years.__class__.__name__ != "list"):
-     years = [years]
- for y in years:
-     if ("urlnetf" in IN): return IN
-     IN["year"] = int(y)
-     IN = netfgethtm_(IN)
-
- return IN
-#----------------------------------------------------------------------------------------------------
-def netfgethtm_(IN):
-
- parm = ("%s %d" %(IN["name"], IN["year"])).replace(" ", "+")
- req  = "http://dvd.netflix.com/Search?v1=" + parm
-
- resp = ""
- try: 
-      jar = cookielib.FileCookieJar("cookies") # allow Netflix cookies
-      opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(jar))
-      resp = opener.open(req).read()
- except Exception, e:
-      print "netfgethtm: GET failed " + str(e.args)
-      return IN
-
- resp = BeautifulSoup(resp, 'lxml')
- resp = resp.find_all("ol")
- if len(resp)>0: resp = str(resp[0])
- else: 
-    print "netfgethtm: empty response"
-    return IN
-
- resp = xmltodict.parse(resp)
- resp = json.loads(json.dumps(resp)) # get rid of ordered dicts
- #print json.dumps(resp, indent=1)
- try: resp = resp["ol"]["li"]
- except:
-    print "netfgethtm: wrong response"
-    return IN
-    
- #print json.dumps(resp, indent=1)
- [year, name, url] = ["", "", ""]
- for el in resp:
-    try:
-        year = el["div"][1]["span"][0]["#text"]
-        name = el["div"][1]["h2"]["span"]["a"]["#text"]
-        url  = el["div"][1]["h2"]["span"]["a"]["@href"]
-        year = int(year)
-        #print name + " " + str(year) + " " + url
-    except:
-        print "netfgethtm: wrong response name: %s year: %s url: %s" % (name, year, url)
-        return IN
-    if (not IN["name"].lower() in name.lower()): 
-       [year, name, url] = ["", "", ""]
-       continue
-
-    #print name + " " + str(year) + " " + url
-    if (year != IN["year"]): 
-       print "netfgethtm: searching for %d, %d is rejected" % (IN["year"], year)
-       [year, name, url] = ["", "", ""]
-       continue 
-
-    break
-  
- if (url==""):
-       print "netfgethtm: nothing found"
-       return IN 
-     
- print "netfgethtm: found: " + name + " " + str(year) + " " + url
- IN["urlnetf"] = url
- IN["name"]    = name
-
- return IN
-#----------------------------------------------------------------------------------------------------
-# get Netflix URL, director from freebase by IMDB URL
-# https://developers.google.com/freebase/v1/mql-overview#querying-for-id-and-name
-def netfget(IN):
- if ("urlimdb" not in IN or IN["urlimdb"] =="" or "urlnetf" in IN): return IN
-
- imdb_id = IN["urlimdb"].replace("http://www.imdb.com/name/", "")
-
- query = [{
-   "type": "/film/film",
-   "imdb_id":     imdb_id,
-   "directed_by": None,
-   "netflix_id":  None  
- }]
- params = {
-           'query': json.dumps(query)
- }
- url = 'https://www.googleapis.com/freebase/v1/mqlread/?' + urllib.urlencode(params)
- response = {}
- try: response = json.loads(urllib.urlopen(url).read())
- except: print "netfget(): Failed to get response"
- urlnetfid = ""
- urlnetf   = ""
- director  = ""
- if ("result" in response and len(response["result"])>0 and "netflix_id" in response["result"][0]): 
-    urlnetfid = response["result"][0]["netflix_id"]
-    urlnetf   = "http://movies.netflix.com/Movie/" + urlnetfid
-    director  = response["result"][0]["directed_by"]
- else: 
-    print "netfget(): Nothing for %s" % (imdb_id)
-    return IN
-
- if (urlnetf!=""):          IN["urlnetf"]  = urlnetf
- if (not "director" in IN): IN["director"] = director
- #print response
-
- return IN
-#----------------------------------------------------------------------------------------------------
-def rottgetcast(IN):
- OUT = []
- for el in IN:
-   if ("characters" in el): OUT.append([el["name"], el["characters"][0]])
-   else:                    OUT.append([el["name"], ""]) 
- return OUT
-#----------------------------------------------------------------------------------------------------
-# See http://developer.rottentomatoes.com/docs/read/json/v10/Movie_Reviews
-def rottgetreviews(ID, ROTT_API_KEY):
- OUT = []
- # get movie reviews by movie id
- REQ   = "http://api.rottentomatoes.com/api/public/v1.0/movies/%s/reviews.json?review_type=top_critic&apikey=%s"
- myREQ = REQ % (ID, ROTT_API_KEY)
- try: 
-   resp, reviews = httplib2.Http().request(myREQ)
- except: 
-   print "rottgetreviews: GET failed"
-   return OUT
- try: 
-   reviews = json.loads(reviews)
-   reviews = reviews["reviews"]
- except: 
-   print "rottgetreviews: Wrong response"
-   return OUT
- 
- if (len(reviews)==0): return OUT
- for el in reviews:
-     if ("links" in el and "review" in el["links"]): 
-        lnk = el["links"]["review"]
-        lnk = lnk.replace("partner=Rotten Tomatoes", "")   
-        OUT.append([el["critic"], lnk])
-
- return OUT
-#----------------------------------------------------------------------------------------------------
-# See http://developer.rottentomatoes.com/docs
-def rottget(IN):
- if ("idrott" in IN): return IN
-
- name  = IN["name"]
- year  = IN["year"]
- REQ   = "http://api.rottentomatoes.com/api/public/v1.0/movies.json?apikey=%s&q=%s"
-
- # get movie id by movie name, 
- myREQ = REQ % (cfg["ROTT_API_KEY"], urllib.quote(name))
- #print myREQ 
- try: resp, res = httplib2.Http().request(myREQ)
- except E: 
-      err = str(E.args)
-      print "rottget: GET failed for %s - %s" % (name, err)
-      return IN
-
- try: 
-   res  = json.loads(res)
-   if ("movies" in res): res  = res["movies"]
-   else: 
-      print "rottget: Wrong response for %s - %s" % (name, str(res))
-      return IN
- except: 
-   print "rottget: Wrong json in response for %s" % (name)
-   return IN
-
- if (len(res)==0): 
-    print "rottget: Not found %s" % (name)
-    return IN
-
- for curr in res:
-    #print curr["title"]
-    if (checkYear(curr["year"], year)):
-      break
-
- if (not checkYear(curr["year"], year)): 
-    print "rottget: Wrong year %s - %s" % (name, curr["year"])
-    return IN
- 
- # get movie info including director by movie id
- REQ   = "http://api.rottentomatoes.com/api/public/v1.0/movies/%s.json?apikey=%s"
- myREQ = REQ % (curr["id"], cfg["ROTT_API_KEY"])
- resp, res = httplib2.Http().request(myREQ)
- res = json.loads(res)
- #print "=>" + res["title"]
- #pprint.pprint(res)
-
- try:    director = res["abridged_directors"][0]["name"]
- except: director = ""
- if ("name" in res):  name  = res["title"]
- else:                name  = ""
- if ("year" in res):  year  = res["year"]
- else:                year  = ""
- if ("id" in res):    id    = res["id"]
- else:                id    = ""
- if ("synopsis" in res): synopsis = res["synopsis"]
- else:                   synopsis = ""
- #print synopsis
- try:    urlrott = res["links"]["alternate"]
- except: urlrott = ""
- try:    urlimdb = "http://www.imdb.com/title/tt" + res["alternate_ids"]["imdb"]
- except: urlimdb = ""
- 
- # results => OUT
- OUT = copy.deepcopy(IN)
- if ("abridged_cast" in res and len(res["abridged_cast"])>0):
-    OUT["cast"] = copy.deepcopy(rottgetcast(res["abridged_cast"]))
- reviews = rottgetreviews(id, cfg["ROTT_API_KEY"])
- if (len(reviews)>0): OUT["urlrev"] = copy.deepcopy(reviews)
- if (not "director" in OUT and director!=""): OUT["director"] = director
- if (not "synopsis" in OUT and synopsis!=""): OUT["synopsis"] = synopsis
- if (not "name" in OUT and name!=""):         OUT["name"]     = name
- if (not "year" in OUT and year!=""):         OUT["year"]     = year
- if (not "urlimdb" in OUT and urlimdb!=""):   OUT["urlimdb"]  = urlimdb
- if (urlrott!=""):                            OUT["urlrott"]  = urlrott
- if (id!=""):                                 OUT["idrott"]   = id
-
- return OUT
-#----------------------------------------------------------------------------------------------------
 # Remove items in IN["urlrev"] with unresolved links
 def checkLinks(IN):
 
@@ -475,14 +256,15 @@ def checkLinks(IN):
 def checkEntries(IN, new):
 
  if (new):
-    allowed = Set(["created", "year", "name", "urlwik", "urlnetf", "urlimdb"])
+    allowed = Set(["created", "year", "name", "urlwik", "urlimdb"])
     present = Set(IN.keys())
     extras  = present - allowed
     if (len(extras)>0):
        extras = list(extras)
        extras.sort() 
-       print "movinfo.checkEntries: entries not allowed for new and removed: " + str(extras)
-       for el in extras:del IN[el]
+       print "checkEntries(): entries not allowed for new and removed"
+       pprint.pprint(extras)
+       for el in extras: del IN[el]
            
  unfilled = []
  for el in ["idrovi"]:
@@ -493,7 +275,9 @@ def checkEntries(IN, new):
  # Check that these are lists of [string, string] pairs
  for el in ["urlwik", "urlyou", "urlrev", "cast"]:
     if (not el in IN): 
-       unfilled.append(el)
+       IN[el] = copy.deepcopy([  
+           ["", ""], ["", ""], ["", ""]
+       ])
        continue
     if (not IN[el].__class__.__name__=="list"):
        print "movinfo.checkEntries: Wrong %s" % (el)
@@ -506,7 +290,9 @@ def checkEntries(IN, new):
            pprint.pprint(el_)
            OK = False
            continue
-        if (not len(el_)==2 or (el_[0].__class__.__name__!="str" and el_[0].__class__.__name__!="unicode") or el_[1].__class__.__name__!="str"):
+        str = el_[0].__class__.__name__=="str" or el_[0].__class__.__name__=="unicode"
+        str = str and (el_[1].__class__.__name__=="str" or el_[1].__class__.__name__=="unicode") 
+        if (len(el_)!=2 or not str):
            #print el_[0].__class__.__name__
            print "movinfo.checkEntries: Wrong %s" % (el)
            pprint.pprint(el_)
@@ -597,14 +383,6 @@ def putDesc(fname, IN, env):
  syn = procAtag(syn)
  INkeys = INkeys - Set(["synopsis"])
 
- rott = "" # Rotten link
- if ("urlrott" in IN): rott = IN["urlrott"] + "\n"
- INkeys = INkeys - Set(["urlrott"])
-
- netf = "" # Netflix link
- if ("urlnetf" in IN and IN["urlnetf"]!=""): netf = IN["urlnetf"] + "\n"
- INkeys = INkeys - Set(["urlnetf"])
-
  imdb = "" # IMDB link
  if ("urlimdb" in IN): imdb = IN["urlimdb"]
  INkeys = INkeys - Set(["urlimdb"])
@@ -613,7 +391,7 @@ def putDesc(fname, IN, env):
  if ("cast" in IN and len(IN["cast"])>0):
     for el in IN["cast"]:
         cast = cast + el[0] 
-        if (el[1]!=""): cast = cast + " as " + el[1] + ", "
+        if (el[1]!=""): cast = cast + " as <b>" + el[1] + "</b>, "
         else:           cast = cast + ", "
     cast = "<b>Cast:</b> %s\n" % (cast[0:len(cast)-2])
  INkeys = INkeys - Set(["cast"])
@@ -624,15 +402,19 @@ def putDesc(fname, IN, env):
         #print el
         if (len(el[0])>0): rev = "%s%s: %s\n" % (rev, el[0], el[1])
         else:              rev = "%s%s\n" % (rev, el[1])
+ rev = rev.strip()       
+ if (rev!=""): rev = rev + "\n"
+
  INkeys = INkeys - Set(["urlrev"])
 
  wik = "" # wiki links
  if ("urlwik" in IN and len(IN["urlwik"])>0):
     if (IN["urlwik"].__class__.__name__ == "str"): IN["urlwik"] = [["Wiki", IN["urlwik"]]] 
     for el in IN["urlwik"]:
-        if (len(el[0])>0): wik = "%s%s: %s\n" % (wik, el[0], el[1])
-        else:              wik = "%sWiki: %s\n" % (wik, el[1])
+        if (len(el[0])>0):   wik = "%s%s: %s\n" % (wik, el[0], el[1])
+        elif (len(el[1])>0): wik = "%sWiki: %s\n" % (wik, el[1])
 #       else:              wik = "%s%s\n % (wik, el[1])
+
  INkeys = INkeys - Set(["urlwik"])
 
  you = "" # youtube links
@@ -642,18 +424,25 @@ def putDesc(fname, IN, env):
         if (len(el[0])>0 and not el[0].startswith("Youtube")): el[0] = "Youtube. " + el[0]
         if (len(el[0])>0): you = "%s%s: %s\n" % (you, el[0], el[1])
         else:              you = "%s%s\n" % (you, el[1])
+ you = you.strip()       
+ if (you!=""): you = you + "\n"
+ 
  INkeys = INkeys - Set(["urlyou"])
 
  if ("created" not in IN): IN["created"] = ""
  
  print "putDesc(): env=" + str(env)
  if (env): 
-    IN_ = "<!-%s %s %s->\n" % (IN["created"], Header, imdb.replace("http://", "")) 
-    IN_ = IN_ + dir + syn + cast + "<b>Links</b>\n" + wik + rott + netf + rev + you
+    _imdb = imdb.replace("http://", "")
+    _imdb = _imdb.replace("https://", "")
+    IN_ = "<!-%s %s %s->\n" % (IN["created"], Header, _imdb) 
+    IN_ = IN_ + dir + syn + cast + "<b>Links</b>\n" + wik + rev + you
     IN_ = IN_ + "<!--info\n%s-->\n" % (json.dumps(IN, indent=1))
  else:  
     IN_ = json.dumps(IN, indent=1)
 
+ #print IN_
+ 
  # append *dscj.txt if there is one
  fdscj = fname.replace("info.txt", "dscj.txt")
  if (env and os.path.exists(fdscj)):
@@ -687,13 +476,13 @@ def putDesc(fname, IN, env):
     os.utime(fname, (t, t))
 
  # Check unusable entries
- unused = list(INkeys - Set(["idrott", "idrovi", "created", "urlrevrm"]))
+ unused = list(INkeys - Set(["idrovi", "created", "urlrevrm"]))
  if (len(unused)>0):   print "movinfo: Warning. Unusable entries %s" % (unused) 
  if ("created" in IN): print "movinfo: Created " + IN["created"]
 
  return
 #----------------------------------------------------------------------------------------------------
-# if newDesc=True,  create new Movie Descriptor using info from Rotten Tomatoes, Netflix, IMDB/omdb, Rovi
+# if newDesc=True,  create new Movie Descriptor using info from IMDB/omdb, Rovi
 # if newDesc=False, update Movie Descriptor using its updated json Descriptor 
 def procDesc(fname, newDesc, linkCheck, env):
  
@@ -710,13 +499,9 @@ def procDesc(fname, newDesc, linkCheck, env):
     if (not "created" in Res):
        now = time
        Res["created"] = now.strftime("%Y-%m-%d")
-    Res = netfgethtm(Res)
-    Res = netfget(Res)
-    Res = rottget(Res)
     Res = omdbget(Res)
     Res = roviget(Res)
- else: Res = netfget(netfgethtm(Res)) # try to add Netflix info to older descriptors
-    
+     
  if (linkCheck): Res = checkLinks(Res)
  putDesc(fname, Res, env)
 
@@ -740,7 +525,6 @@ def getCfg():
 
   #print cfg
   issues = []
-  if ("ROTT_API_KEY" not in cfg):       issues.append("ROTT_API_KEY")
   if ("ROVI_SEARCH_KEY" not in cfg):    issues.append("ROVI_SEARCH_KEY")
   if ("ROVI_SEARCH_SECRET" not in cfg): issues.append("ROVI_SEARCH_SECRET")
   if ("OMDB_API_KEY" not in cfg):       issues.append("OMDB_API_KEY")
@@ -751,6 +535,27 @@ def getCfg():
  
   return
 #----------------------------------------------------------------------------------------------------
+# desc can be info.txt or dscj.txt
+# Find matching descriptor in the current dir or craete a new one
+def setDesc(desc):
+ L = glob.glob("*" + desc)
+ L.sort()
+ res = ""
+ if (len(L)>0): 
+   res = L[0]
+   return res # got desc
+   
+ # Create new desc using the current dir name
+ cwd = os.getcwd().replace("\\", "/").split("/")[-1]
+ p = re.compile("[^a-zA-Z0-9\.]")
+ res = p.sub("", cwd) + "." + desc
+
+ open(res, 'a').close()
+ 
+ print "setDesc: no descriptor found, created empty " + res
+ 
+ return res # new desc created
+#----------------------------------------------------------------------------------------------------
 def main():
   parser = argparse.ArgumentParser(description=help)
   group  = parser.add_mutually_exclusive_group(required=True)
@@ -758,7 +563,8 @@ def main():
   group.add_argument('-u', action="store_true", help="Update existing descriptor")
   group.add_argument('-ue', action="store_true", help="Update existing descriptor with envelope for JSON")
   parser.add_argument("-l", action="store_true", help="Check links for reviews")
-  parser.add_argument("path", type = str, help="Movie Descriptor(s) to process")
+  #parser.add_argument("path", type = str, help="Movie Descriptor(s) to process")
+
   args      = vars(parser.parse_args())
   env       = args["ue"]
   new       = args["n"]
@@ -766,23 +572,17 @@ def main():
   
   getCfg()
   
-  fname = args["path"]
-  print "movinfo: %s new=%s" % (fname, new)
-  if (fname.find("*")<0 and fname.endswith(".info.txt") and os.path.exists(fname)):
-     procDesc(fname, new, false, env) 
-     exit() 
+  fname = setDesc("info.txt")
+  print "movinfo: using " + fname
   
-  List = glob.glob(args["path"])
-  List = [el for el in List if (el.endswith(".info.txt"))] # use only *.info.txt files
-  if (len(List)==0):
-     print "movinfo: Nothing to process"
-     exit()
+  dscj = fname.replace(".info.", ".dscj.")
+  if (not os.path.exists(dscj)):
+     open(dscj, 'a').close()
+     print "movinfo: created " + dscj
   
-  for el in List:
-     print "movinfo: %s new=%s" % (el, new)
-     procDesc(el, new, linkCheck, env) 
+  procDesc(fname, new, linkCheck, env) 
+  exit() 
 
-  return
 #----------------------------------------------------------------------------------------------------
 if __name__=="__main__": main()
 exit()
