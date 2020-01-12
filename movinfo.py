@@ -19,34 +19,37 @@
 # Version: 08/13/2017 - added OMDB API key
 # Version: 12/25/2017 - minor fix of checkEntries
 # Version: 06/03/2018 - minor fix to enable https://imdb.com
-# Version: 06/25/2018 - added placeholders to missing keys 
-# Version: 07/07/2018 - removed all about Netflix, Rotten APIs   
-# Version: 08/06/2018 - path arg retired
+# Version: 06/25/2018 - added placeholders to missing keys
+# Version: 07/07/2018 - removed all about Netflix, Rotten APIs
+# Version: 08/06/2018 - path argument retired
 #                       added setDesc() to use pre-existing *.info.txt or create a new one
 #                       create empty *dscj.txt if it does not exist
+# Version: 12/02/2018 - exception procs in roviget()
+# Version: 12/17/2018 - updated utf8()
+# Version: 12/15/2019 - updated utf8()
+# Version: 01/12/2020 - now works both in Python 2.7 and 3.8.0
+#                       roviget() changed to use http2
+#                       utf8() updated 
 
 # Rovi Metadata and Search API: https://secure.mashery.com/login/developer.rovicorp.com/
 # OMDB API: http://www.omdbapi.com/ https://www.patreon.com/bePatron?c=740003
 
-import sys, os, datetime, urllib, re, json, copy
+import sys, os, platform, datetime, re, json, copy
 import shutil
-import httplib2 
-import xmltodict
-#from bs4 import BeautifulSoup
-import urllib2
-import cookielib
 import time, hashlib
 from datetime import datetime
-import argparse, glob
-from sets import Set
-import pprint
-#import textwrap
+import argparse, glob, pprint
+from builtins import str
+
+import httplib2
+
+try:
+    from urllib import quote        # Python 2.X
+except ImportError:
+    from urllib.parse import quote  # Python 3+ 
 
 # For Win/ActivePython, CentOS run:
 # pip install httplib2
-# pip install xmltodict
-# pip install beautifulsoup4
-# lxml-3.4.4.win32-py2.7.exe from https://pypi.python.org/pypi/lxml/3.4.4 - Win olnly
 
 help = '''
 Create/update movie descriptor *.info.txt using info from Rotten Tomatoes, IMDB/omdb, Rovi.
@@ -57,24 +60,15 @@ NOTE: Web service keys are kept in movinfo.json.
 '''
 #----------------------------------------------------------------------------------------------------
 # all symbols after x'80' => HTML encoding $#xxx;
-def utf8(latin1): 
-# http://inamidst.com/stuff/2010/96.py
-# http://www.ascii-code.com/
-      #print "=>"
-      Res = ""
-      for character in latin1: 
-         codepoint = ord(character)
-         if codepoint < 0x80: Res = Res + character
-         else: Res = "%s&#%d;" % (Res, codepoint) 
-
-      return Res
+def utf8(str): 
+    if (hasattr(str, "decode")): return str.decode('utf-8').encode('ascii', 'xmlcharrefreplace')
+    else: return str.encode('ascii', 'xmlcharrefreplace').decode('utf-8')
 #----------------------------------------------------------------------------------------------------
 # Check if y1 from the response matches with y2 in the descriptor
 # y1 can be int or string
 # y2 can be int or list of ints: 2000 or [2000, 2005, 2010]
 # y1 matches OK if abs(y1-y2)=0
 def checkYear(y1, y2):
-
  try: y1 = int(y1)
  except: 
      return False 
@@ -98,21 +92,21 @@ def omdbget(IN):
  if (N==0): return IN # all data already in IN
 
  REQ   = "http://www.omdbapi.com/?t=%s&apikey=%s"
- myREQ = REQ % (urllib.quote(name), cfg["OMDB_API_KEY"])
+ myREQ = REQ % (quote(name), cfg["OMDB_API_KEY"])
  try: resp, res = httplib2.Http().request(myREQ)
  except: 
-   print "omdbget(): GET failed for %s" % (name)
+   print ("omdbget(): GET failed for %s" % (name))
    return IN
 
  try:
    res = json.loads(res)
  except: 
-   print "omdbget(): Wrong response for %s" % (name)
+   print ("omdbget(): Wrong response for %s" % (name))
    return IN
 
  #pprint.pprint(res)
  if ("Error" in res or not checkYear(res["Year"], year)):
-   print "omdbget(): Not found %s" % (name)
+   print ("omdbget(): Not found %s" % (name))
    return IN 
 
  actors = []
@@ -131,7 +125,7 @@ def omdbget(IN):
  if (not "cast" in OUT):                        OUT["cast"]     = actors
 
  #pprint.pprint(res) 
- print "omdbget(): OK"
+ print ("omdbget(): OK")
  return OUT
 #----------------------------------------------------------------------------------------------------
 def rovigetcast(IN):
@@ -145,52 +139,64 @@ def rovigetcast(IN):
 def roviget(IN):
  if (not "name" in IN or "year" not in IN or "idrovi" in IN): return IN
 
+ # URL to get cast, synopsis by movieID
+ apiUrlId = "http://api.rovicorp.com/data/v1/movie/info?movieid=%s&include=cast,synopsis&format=json&apikey=%s&sig=%s"
  # URL to get movieId, title, directors, cast, directors
  # then search the resultset by title, releaseYear
- api_url      = "http://api.rovicorp.com/recognition/v2.1/amgvideo/match/video?"
- api_url_parm = "entitytype=movie&title=%s&include=cast,synopsis&size=50&format=json&apikey=%s&sig=%s"
+ apiUrl   = "http://api.rovicorp.com/recognition/v2.1/amgvideo/match/video?"
 
- # URL to get cast, synopsis by movieID
- api_url1 = "http://api.rovicorp.com/data/v1/movie/info?movieid=%s&include=cast,synopsis&format=json&apikey=%s&sig=%s"
+ apiParmFmt = "entitytype=movie&title=%s&include=cast,synopsis&size=50&format=json&apikey=%s&sig=%s"
 
  timestamp = int(time.time())
  m = hashlib.md5()
- m.update(cfg["ROVI_SEARCH_KEY"])
- m.update(cfg["ROVI_SEARCH_SECRET"])
- m.update(str(timestamp))
+ m.update(cfg["ROVI_SEARCH_KEY"].encode("utf-8"))
+ m.update(cfg["ROVI_SEARCH_SECRET"].encode("utf-8"))
+ m.update(str(timestamp).encode("utf-8"))
  SIG = m.hexdigest()
 
- api_url_parm = api_url_parm % (IN["name"], cfg["ROVI_SEARCH_KEY"], SIG)
- url = api_url + api_url_parm
- #url = urllib.quote(url)
- #print url
- try:    response = json.loads(urllib.urlopen(url).read())
- except: response = ""
- if (response=="" or "matchResponse" not in response or "results" not in response["matchResponse"]):
-    print "roviget: Failed request"
+ apiParm = apiParmFmt % (quote(IN["name"]), cfg["ROVI_SEARCH_KEY"], SIG)
+ url = (apiUrl + apiParm)
+ 
+ try: resp, res = httplib2.Http().request(url)
+ except Exception as err:
+   print ("roviget(): GET failed: " + str(err))
+   return IN
+ res = utf8(res)
+ 
+ try:
+   response = json.loads(res)
+ except Exception as err:
+   print ("roviget(): Wrong response: " + str(err))
+   return IN
+ 
+ if ("matchResponse" not in response or "results" not in response["matchResponse"]):
+    print ("roviget: wrong response")
     return IN
  #pprint.pprint(response)
  response = response["matchResponse"]["results"]
  if (response==None):
-    print "roviget: Failed request"
+    print ("roviget: Failed request")
     return IN
  id       = ""
  cast     = ""
  director = ""
  synopsys = ""
- itemsChecked = Set()
+ itemsChecked = set()
  for item in response:
    if (not "movie" in item): continue
    item = item["movie"]
    itemsChecked.add(utf8(item["title"]) + " - " + str(item["releaseYear"]))
    if (item["title"].lower()!=IN["name"].lower()): continue
    if (not checkYear(item["releaseYear"], IN["year"])): 
-       print "rovget: Wrong year %s" % (item["releaseYear"])
+       print ("roviget(): Wrong year %s" % (item["releaseYear"]))
        return IN
    id = [item["ids"]["cosmoId"], item["ids"]["movieId"]]
-   for el in item["directors"]:
-     director = ", " + el["name"]
-   director = director[2:]
+   try: 
+     for el in item["directors"]:
+        director = ", " + el["name"]
+     director = director[2:]
+   except Exception as err: 
+     print ("roviget(): Can't process director " + str(err))
    try:         
       cast = rovigetcast(item["cast"])
    except:
@@ -208,7 +214,7 @@ def roviget(IN):
  if (id==""):
     itemsChecked = list(itemsChecked)
     itemsChecked.sort()
-    print "rovget: Nothing found. Checked: %s" % (str(itemsChecked))
+    print ("roviget(): Nothing found. Checked: %s" % (str(itemsChecked)))
     return IN
  
  IN["idrovi"] = copy.deepcopy(id)
@@ -225,6 +231,7 @@ def roviget(IN):
  if ("synopsis" in IN):   ldir = len(IN["synopsis"])
  if (len(synopsis)>lsyn): IN["synopsis"] = synopsis
 
+ print ("roviget(): OK")
  return IN
 #----------------------------------------------------------------------------------------------------
 # Remove items in IN["urlrev"] with unresolved links
@@ -239,7 +246,7 @@ def checkLinks(IN):
     if (not "status" in resp): resp["status"] = ""
     if (str(resp["status"])!="200"):
         rm.append(str(el))
-        print "movinfo: removed %s %s status=%s" % (el[0], el[1], resp["status"])
+        print ("movinfo: removed %s %s status=%s" % (el[0], el[1], resp["status"]))
     else: OUT.append(el)
 
  IN["urlrev"] = copy.deepcopy(OUT)
@@ -248,7 +255,7 @@ def checkLinks(IN):
     tmp = []
     if ("urlrevrm" in IN): tmp = IN["urlrevrm"]
     tmp = tmp + rm
-    tmp = list(Set(tmp))
+    tmp = list(set(tmp))
     IN["urlrevrm"] = tmp
  return IN
 #----------------------------------------------------------------------------------------------------
@@ -256,13 +263,13 @@ def checkLinks(IN):
 def checkEntries(IN, new):
 
  if (new):
-    allowed = Set(["created", "year", "name", "urlwik", "urlimdb"])
-    present = Set(IN.keys())
+    allowed = set(["created", "year", "name", "urlwik", "urlimdb", "urlrev"])
+    present = set(list(IN.keys()))
     extras  = present - allowed
     if (len(extras)>0):
        extras = list(extras)
        extras.sort() 
-       print "checkEntries(): entries not allowed for new and removed"
+       print ("checkEntries(): entries not allowed for new and removed")
        pprint.pprint(extras)
        for el in extras: del IN[el]
            
@@ -280,13 +287,13 @@ def checkEntries(IN, new):
        ])
        continue
     if (not IN[el].__class__.__name__=="list"):
-       print "movinfo.checkEntries: Wrong %s" % (el)
+       print ("movinfo.checkEntries: Wrong %s" % (el))
        #pprint.pprint(In[el])
        OK = False
        continue
     for el_ in IN[el]:
         if (not el_.__class__.__name__=="list"):
-           print "movinfo.checkEntries: Wrong %s" % (el)
+           print ("movinfo.checkEntries: Wrong %s" % (el))
            pprint.pprint(el_)
            OK = False
            continue
@@ -294,20 +301,20 @@ def checkEntries(IN, new):
         str = str and (el_[1].__class__.__name__=="str" or el_[1].__class__.__name__=="unicode") 
         if (len(el_)!=2 or not str):
            #print el_[0].__class__.__name__
-           print "movinfo.checkEntries: Wrong %s" % (el)
+           print ("movinfo.checkEntries: Wrong %s" % (el))
            pprint.pprint(el_)
            OK = False
            continue
 
  unfilled.sort()
- if (len(unfilled)>0 and not new): print "movinfo: Warning. Missing/wrong entries %s" % (unfilled) 
+ if (len(unfilled)>0 and not new): print ("movinfo: Warning. Missing/wrong entries %s" % (unfilled)) 
 
  return [OK, IN]
 #----------------------------------------------------------------------------------------------------
 # remove commented entries ["#xxx", "yyy"]
 def rmComments(IN):
 
- for el in IN.keys(): # remove commented entries of the 1st level
+ for el in list(IN.keys()): # remove commented entries of the 1st level
      if (el!="" and el[0]=="#"): del IN[el]
       
  for el in ["cast", "urlwik", "urlrev"]:
@@ -332,6 +339,7 @@ def getDesc(fname, new):
  try:
    F   = open(fname)
    F_  = " " + F.read() + " "
+   F_  = utf8(F_)
    # get json descriptor
    if ("<!--info" in F_): 
       F_  = F_.split("<!--info")
@@ -340,13 +348,13 @@ def getDesc(fname, new):
    else: F_ = [F_]
    IN  = json.loads(F_[0])
    F.close()
-   #print IN
+   #print (IN)
    #exit
  except:
-   print "movinfo: Wrong JSON in %s" % fname
+   print ("movinfo: Wrong JSON in %s" % fname)
    return {}
  if (not "name" in IN or not "year" in IN):
-   print "movinfo: No movie name/year in %s" % fname
+   print ("movinfo: No movie name/year in %s" % fname)
    return {}
  
  [OK, IN] = checkEntries(IN, new)
@@ -367,25 +375,25 @@ def procAtag(IN):
 #----------------------------------------------------------------------------------------------------
 def putDesc(fname, IN, env):
 
- INkeys = Set(IN.keys())
+ INkeys = set(list(IN.keys()))
 
  HeaderYear = IN["year"]
  if (HeaderYear.__class__.__name__ == "list"): HeaderYear = HeaderYear[0]
  Header = "%s (%s)" % (IN["name"], HeaderYear)
- INkeys = INkeys - Set(["name", "year"])
+ INkeys = INkeys - set(["name", "year"])
 
  dir = "" # director
  if ("director" in IN): dir = "<b>Director:</b> %s\n" % (IN["director"])
- INkeys = INkeys - Set(["director"])
+ INkeys = INkeys - set(["director"])
 
  syn = "" # synopsis
  if ("synopsis" in IN): syn = "<b>Synopsis:</b> %s\n" % (IN["synopsis"])
  syn = procAtag(syn)
- INkeys = INkeys - Set(["synopsis"])
+ INkeys = INkeys - set(["synopsis"])
 
  imdb = "" # IMDB link
  if ("urlimdb" in IN): imdb = IN["urlimdb"]
- INkeys = INkeys - Set(["urlimdb"])
+ INkeys = INkeys - set(["urlimdb"])
 
  cast = ""
  if ("cast" in IN and len(IN["cast"])>0):
@@ -394,18 +402,18 @@ def putDesc(fname, IN, env):
         if (el[1]!=""): cast = cast + " as <b>" + el[1] + "</b>, "
         else:           cast = cast + ", "
     cast = "<b>Cast:</b> %s\n" % (cast[0:len(cast)-2])
- INkeys = INkeys - Set(["cast"])
+ INkeys = INkeys - set(["cast"])
 
  rev = "" # reviews links
  if ("urlrev" in IN and len(IN["urlrev"])>0):
     for el in IN["urlrev"]:
-        #print el
+        #print (el)
         if (len(el[0])>0): rev = "%s%s: %s\n" % (rev, el[0], el[1])
         else:              rev = "%s%s\n" % (rev, el[1])
  rev = rev.strip()       
  if (rev!=""): rev = rev + "\n"
 
- INkeys = INkeys - Set(["urlrev"])
+ INkeys = INkeys - set(["urlrev"])
 
  wik = "" # wiki links
  if ("urlwik" in IN and len(IN["urlwik"])>0):
@@ -415,7 +423,7 @@ def putDesc(fname, IN, env):
         elif (len(el[1])>0): wik = "%sWiki: %s\n" % (wik, el[1])
 #       else:              wik = "%s%s\n % (wik, el[1])
 
- INkeys = INkeys - Set(["urlwik"])
+ INkeys = INkeys - set(["urlwik"])
 
  you = "" # youtube links
  if ("urlyou" in IN and len(IN["urlyou"])>0):
@@ -427,11 +435,11 @@ def putDesc(fname, IN, env):
  you = you.strip()       
  if (you!=""): you = you + "\n"
  
- INkeys = INkeys - Set(["urlyou"])
+ INkeys = INkeys - set(["urlyou"])
 
  if ("created" not in IN): IN["created"] = ""
  
- print "putDesc(): env=" + str(env)
+ print ("putDesc(): env=" + str(env))
  if (env): 
     _imdb = imdb.replace("http://", "")
     _imdb = _imdb.replace("https://", "")
@@ -451,22 +459,28 @@ def putDesc(fname, IN, env):
      F_  = F.read()
      if ("<!--dscj" in F_):
         IN_ = IN_ + F_
-        print "putDesc(): Appended " + fdscj
+        print ("putDesc(): Appended " + fdscj)
      else: 
-         print "putDesc(): no envelope in " + fdscj
-    except Exception, err: 
-     print "putDesc(): %s not found" % (fdscj)
-
+         print ("putDesc(): no envelope in " + fdscj)
+    except Exception as err: 
+     print ("putDesc(): %s not found" % (fdscj))
+ IN_ = utf8(IN_)
+ 
  # write the prepared descriptor to *info.txt
+ 
+ shutil.copyfile(fname, fname+"._bak")
  F   = open(fname, "w")
  codecFail = False
  try: F.write(IN_)
- except Exception, err:
-   codecFail = str(err).find("can't encode character")>0 
- if (codecFail):  
-    F.write(utf8(IN_)) 
+ except Exception as err:
+   codecFail = True
+   print ("Failed putDesc(): " + str(err))
  F.close()
 
+ if (codecFail): 
+    shutil.copyfile(fname + "._bak", fname)
+ os.remove(fname + "._bak")
+ 
  # set access time to created
  cr = IN["created"].split("-")
  if len(cr)>1:
@@ -476,9 +490,9 @@ def putDesc(fname, IN, env):
     os.utime(fname, (t, t))
 
  # Check unusable entries
- unused = list(INkeys - Set(["idrovi", "created", "urlrevrm"]))
- if (len(unused)>0):   print "movinfo: Warning. Unusable entries %s" % (unused) 
- if ("created" in IN): print "movinfo: Created " + IN["created"]
+ unused = list(INkeys - set(["idrovi", "created", "urlrevrm"]))
+ if (len(unused)>0):   print ("movinfo: Warning. Unusable entries %s" % (unused))
+ if ("created" in IN): print ("movinfo: Created " + IN["created"])
 
  return
 #----------------------------------------------------------------------------------------------------
@@ -494,8 +508,8 @@ def procDesc(fname, newDesc, linkCheck, env):
     try: 
        fnamebak = fname.replace(".txt", ".bak")
        shutil.copy2(fname, fnamebak)
-    except Exception, err:
-       print "movinfo: Failed to create " + fnamebak
+    except Exception as err:
+       print ("movinfo: Failed to create " + fnamebak)
     if (not "created" in Res):
        now = time
        Res["created"] = now.strftime("%Y-%m-%d")
@@ -512,31 +526,32 @@ def getCfg():
   
   global cfg
  
-  fn = os.path.dirname(sys.argv[0]).replace("\\", "/") + "/movinfo.json"
+  scriptdir = os.path.dirname(os.path.realpath(__file__))
+  fn        = scriptdir.replace("\\", "/") + "/movinfo.json"
   if (not os.path.exists(fn)):
-       print "movinfo: %s does not exist" % (fn)  
+       print ("getCfg(): %s does not exist" % (fn))
        exit()
   try:
        cfg = json.loads(open(fn).read())
-  except Exception, e:
-       print "movinfo: wrong JSON in %s" % (fn)
+  except Exception as e:
+       print ("getCfg(): wrong JSON in %s" % (fn))
        exit() 
-  print "movinfo: using %s\n" % (fn)
+  print ("getCfg(): using %s\n" % (fn))
 
-  #print cfg
+  #print (cfg)
   issues = []
   if ("ROVI_SEARCH_KEY" not in cfg):    issues.append("ROVI_SEARCH_KEY")
   if ("ROVI_SEARCH_SECRET" not in cfg): issues.append("ROVI_SEARCH_SECRET")
   if ("OMDB_API_KEY" not in cfg):       issues.append("OMDB_API_KEY")
   
   if (len(issues)>0):
-      print "movinfo: missing %s" % (str(issues))
+      print ("movinfo: missing %s" % (str(issues)))
       exit()
  
   return
 #----------------------------------------------------------------------------------------------------
 # desc can be info.txt or dscj.txt
-# Find matching descriptor in the current dir or craete a new one
+# Find matching descriptor in the current dir or create a new one
 def setDesc(desc):
  L = glob.glob("*" + desc)
  L.sort()
@@ -552,7 +567,7 @@ def setDesc(desc):
 
  open(res, 'a').close()
  
- print "setDesc: no descriptor found, created empty " + res
+ print ("setDesc: no descriptor found, created empty " + res)
  
  return res # new desc created
 #----------------------------------------------------------------------------------------------------
@@ -573,14 +588,14 @@ def main():
   getCfg()
   
   fname = setDesc("info.txt")
-  print "movinfo: using " + fname
+  print ("movinfo: using " + fname)
   
   dscj = fname.replace(".info.", ".dscj.")
   if (not os.path.exists(dscj)):
      open(dscj, 'a').close()
-     print "movinfo: created " + dscj
+     print ("movinfo: created " + dscj)
   
-  procDesc(fname, new, linkCheck, env) 
+  procDesc(fname, new, linkCheck, env)
   exit() 
 
 #----------------------------------------------------------------------------------------------------
