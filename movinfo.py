@@ -30,6 +30,7 @@
 # Version: 01/12/2020 - now works both in Python 2.7 and 3.8.0
 #                       roviget() changed to use http2
 #                       utf8() updated 
+# Version: 03/13/2021 - enabled extract() for -uxe
 
 # Rovi Metadata and Search API: https://secure.mashery.com/login/developer.rovicorp.com/
 # OMDB API: http://www.omdbapi.com/ https://www.patreon.com/bePatron?c=740003
@@ -48,11 +49,11 @@ try:
 except ImportError:
     from urllib.parse import quote  # Python 3+ 
 
-# For Win/ActivePython, CentOS run:
+# For Python3, CentOS run:
 # pip install httplib2
 
 help = '''
-Create/update movie descriptor *.info.txt using info from Rotten Tomatoes, IMDB/omdb, Rovi.
+Create/update movie descriptor *.info.txt using info from IMDB/omdb, Rovi.
 Movie descriptor includes json and ASCII envelop, envelope is built from json.
 After descriptor is created with -n option, json part can be updated manually. 
 Then ASCII envelope is compiled from json by -ue option.
@@ -261,7 +262,6 @@ def checkLinks(IN):
 #----------------------------------------------------------------------------------------------------
 # Check that certain entries are in IN and have proper format
 def checkEntries(IN, new):
-
  if (new):
     allowed = set(["created", "year", "name", "urlwik", "urlimdb", "urlrev"])
     present = set(list(IN.keys()))
@@ -332,6 +332,31 @@ def rmComments(IN):
      IN[el] = out 
 
  return IN
+#----------------------------------------------------------------------------------------------------
+def extract(fname):
+ try:
+   F   = open(fname, "r")
+   F_  = " " + F.read() + " "
+   F_  = utf8(F_)
+   F.close()
+   if (not("<!--info" in F_) or not("<!--dscj" in F_)):   
+       print("extract: can't extract *dscj.txt from " + fname)
+       return
+	   
+   start = F_.find("<!--dscj") + len("<!--dscj")
+   end   = F_.find("-->", start)
+   dscj  = F_[start:end].strip()
+   
+   fnamej = fname.replace("info", "dscj")
+   FW    = open(fnamej, "w")
+   FW.write(dscj)
+   FW.close()
+ except Exception as err: 
+   print ("extract: failed %s err=%s" % (fname, err))
+   return 
+   
+ print("extract: created %s from %s" % (fnamej, fname))
+ return  
 #----------------------------------------------------------------------------------------------------
 # Descriptor in the file fname => IN dictionary
 def getDesc(fname, new):
@@ -523,7 +548,6 @@ def procDesc(fname, newDesc, linkCheck, env):
 #----------------------------------------------------------------------------------------------------
 cfg = {} 
 def getCfg():
-  
   global cfg
  
   scriptdir = os.path.dirname(os.path.realpath(__file__))
@@ -536,7 +560,7 @@ def getCfg():
   except Exception as e:
        print ("getCfg(): wrong JSON in %s" % (fn))
        exit() 
-  print ("getCfg(): using %s\n" % (fn))
+  print ("getCfg(): using " + fn)
 
   #print (cfg)
   issues = []
@@ -577,11 +601,13 @@ def main():
   group.add_argument('-n', action="store_true", help="Create new descriptor(s) using DB info with 'name', 'year' as movie seach arguments")
   group.add_argument('-u', action="store_true", help="Update existing descriptor")
   group.add_argument('-ue', action="store_true", help="Update existing descriptor with envelope for JSON")
+  group.add_argument('-uxe', action="store_true", help="extract *dscj from envelope")
   parser.add_argument("-l", action="store_true", help="Check links for reviews")
   #parser.add_argument("path", type = str, help="Movie Descriptor(s) to process")
 
   args      = vars(parser.parse_args())
   env       = args["ue"]
+  xenv      = args["uxe"]
   new       = args["n"]
   linkCheck = args["l"]
   
@@ -594,7 +620,12 @@ def main():
   if (not os.path.exists(dscj)):
      open(dscj, 'a').close()
      print ("movinfo: created " + dscj)
-  
+     return
+	 
+  if (xenv):
+      extract(fname)
+      exit()
+	 
   procDesc(fname, new, linkCheck, env)
   exit() 
 
