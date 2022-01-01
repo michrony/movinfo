@@ -31,8 +31,9 @@
 #                       roviget() changed to use http2
 #                       utf8() updated 
 # Version: 03/13/2021 - enabled extract() for -uxe
+# Version: 03/21/2021 - use encoding='utf8' for open, close
+# Version: 12/24/2021 - enable tmdb API by id instead of OMDB, ROVI
 
-# Rovi Metadata and Search API: https://secure.mashery.com/login/developer.rovicorp.com/
 # OMDB API: http://www.omdbapi.com/ https://www.patreon.com/bePatron?c=740003
 
 import sys, os, platform, datetime, re, json, copy
@@ -81,6 +82,134 @@ def checkYear(y1, y2):
     if (abs(y1-int(y))<=0): return True
  
  return False
+#---------------------------------------------------------------
+def getTmdbData(urlimdb, urltmdb, tmdbkey):
+ if (not tmdbkey or type(tmdbkey)!=str):
+    print ("getTmdbData(): wrong tmdbkey: " + str(tmdbkey))
+    return False
+	
+ imdbId = ""
+ if (urlimdb and "//www" in urlimdb and "/title/tt" in urlimdb):
+    imdbId = urlimdb.split("title/")[1]
+ if ("/" in imdbId): imdbId = imdbId.split("/")[0]
+ if ("?" in imdbId): imdbId = imdbId.split("?")[0]
+
+ tmdbId = 0
+ if (urltmdb and "//www" in urltmdb and "/movie/" in urltmdb):
+    tmdbId = urltmdb.split("/movie/")[1]
+ if (tmdbId and "-" in tmdbId): tmdbId = tmdbId.split("-")[0]
+ if (tmdbId and not tmdbId.isnumeric()): tmdbId = 0 
+ if (not imdbId and not tmdbId):
+    print ("getTmdbData(): can't get imdbId, tmdbId from [%s,%s]" % (str(urlimdb), str(urltmdb)))
+    return False
+
+ id = imdbId
+ if (not id): id = tmdbId
+ reqMain = "https://api.themoviedb.org/3/movie/%s?api_key=%s" % (id, tmdbkey)
+ reqCrew = "https://api.themoviedb.org/3/movie/%s/credits?api_key=%s" % (id, tmdbkey)
+ 
+ print ("getTmdbData(): stage 1 - try " + id)
+ try: resp, resMain = httplib2.Http().request(reqMain)
+ except: 
+   print ("getTmdbData(): GET failed")
+ status = ""
+ if ("status" in resp): status = str(resp.status)
+ if (status!="200"):
+   print ("getTmdbData(): GET failed: " + status) 
+   return False
+   
+ resMain = str(utf8(resMain)).strip("b'")
+ resMain = resMain.replace("\\'", "'")
+ resMain = resMain.replace("\\\\\"", "'")
+ res = ""
+ try:
+   res = json.loads(resMain)
+ except Exception as err: 
+   print ("getTmdbData(): Failed json load err=%s : %s" % (str(err), resMain))
+   return False
+ resMain = res  
+ res = ""
+ 
+ print ("getTmdbData(): stage 2")
+ try: resp, resCrew = httplib2.Http().request(reqCrew)
+ except: 
+   print ("getTmdbData(): GET failed")
+ status = ""
+ if ("status" in resp): status = str(resp.status)
+ if (status!="200"):
+   print ("getTmdbData(): GET failed: " + status) 
+   return [resMain, False] 
+   
+ resCrew = str(utf8(resCrew)).strip("b'")
+ resCrew = resCrew.replace("\\'", "'")
+ resCrew = resCrew.replace("\\\\\"", "'")
+ res = ""
+ try:
+   res = json.loads(resCrew)
+ except Exception as err: 
+   print ("getTmdbData(): Failed json load - err=%s %s" % (str(err), resCrew))
+   return [resMain, False]
+ resCrew = False
+ if ("cast" in res and "crew" in res): resCrew = res["cast"] + res["crew"]
+ res = ""
+ 
+ return [resMain, resCrew]
+#---------------------------------------------------------------
+def procTmdbData(IN):
+ if (not IN):
+    print ("procTmdbData(): nothing to process")
+    return False
+ 
+ print ("procTmdbData(): process main")
+ main = IN[0]
+ crew = IN[1]
+ out  = {}
+ n    = 0
+ urlrev = [ ["", ""], ["", ""], ["", ""] ] 
+ cast = [ ["", ""], ["", ""], ["", ""] ]
+ 
+ if ("title" in main): 
+    out["name"] = main["title"]
+    n += 1
+ if ("release_date" in main):
+    year = main["release_date"].split("-")[0]
+    out["year"] = int(year)
+    n += 1
+ if ("imdb_id" in main):
+    out["urlimdb"] = "https://www.imdb.com/title/" + main["imdb_id"] + "/"
+    n += 1
+ if ("id" in main):  
+    curr = ["", "https://www.themoviedb.org/movie/" + str(main["id"])]
+    urlrev.insert(0, curr)
+    out["urlrev"] = urlrev
+    n += 1
+ if ("overview" in main):
+    out["synopsis"] = main["overview"]
+    n += 1
+
+ out["director"] = ""
+ out["cast"] = cast
+ 
+ if (n!=5):
+    print ("procTmdbData(): Incomplete out: " + str(out))
+    return False
+ if (not crew): return out
+ 
+ print ("procTmdbData(): process crew")
+ cast = []
+ for item in crew:
+     if ("job" in item and "name" in item): 
+        if (item["job"]!="Director" or not item["name"]): continue
+        out["director"] = item["name"]
+        continue
+     if ("character" in item and "name" in item): 
+        if (not item["name"] or not item["character"]): continue
+        curr = [ item["name"], item["character"] ]
+        cast.append(curr)
+ out["cast"] = cast
+ now = datetime.now().strftime("%Y-%m-%d")
+ out["created"] = IN[0].get("created", now)
+ return out
 #------------------------------------
 def omdbget(IN):
 
@@ -129,112 +258,6 @@ def omdbget(IN):
  print ("omdbget(): OK")
  return OUT
 #----------------------------------------------------------------------------------------------------
-def rovigetcast(IN):
- OUT = []
- for el in IN:
-   OUT.append([utf8(el["name"]), utf8(el["role"])]) 
- return OUT
-#----------------------------------------------------------------------------------------------------
-# rovi docs: http://prod-doc.rovicorp.com/mashery/index.php/Media-recognition-api/v2/match 
-# http://developer.rovicorp.com/io-docs
-def roviget(IN):
- if (not "name" in IN or "year" not in IN or "idrovi" in IN): return IN
-
- # URL to get cast, synopsis by movieID
- apiUrlId = "http://api.rovicorp.com/data/v1/movie/info?movieid=%s&include=cast,synopsis&format=json&apikey=%s&sig=%s"
- # URL to get movieId, title, directors, cast, directors
- # then search the resultset by title, releaseYear
- apiUrl   = "http://api.rovicorp.com/recognition/v2.1/amgvideo/match/video?"
-
- apiParmFmt = "entitytype=movie&title=%s&include=cast,synopsis&size=50&format=json&apikey=%s&sig=%s"
-
- timestamp = int(time.time())
- m = hashlib.md5()
- m.update(cfg["ROVI_SEARCH_KEY"].encode("utf-8"))
- m.update(cfg["ROVI_SEARCH_SECRET"].encode("utf-8"))
- m.update(str(timestamp).encode("utf-8"))
- SIG = m.hexdigest()
-
- apiParm = apiParmFmt % (quote(IN["name"]), cfg["ROVI_SEARCH_KEY"], SIG)
- url = (apiUrl + apiParm)
- 
- try: resp, res = httplib2.Http().request(url)
- except Exception as err:
-   print ("roviget(): GET failed: " + str(err))
-   return IN
- res = utf8(res)
- 
- try:
-   response = json.loads(res)
- except Exception as err:
-   print ("roviget(): Wrong response: " + str(err))
-   return IN
- 
- if ("matchResponse" not in response or "results" not in response["matchResponse"]):
-    print ("roviget: wrong response")
-    return IN
- #pprint.pprint(response)
- response = response["matchResponse"]["results"]
- if (response==None):
-    print ("roviget: Failed request")
-    return IN
- id       = ""
- cast     = ""
- director = ""
- synopsys = ""
- itemsChecked = set()
- for item in response:
-   if (not "movie" in item): continue
-   item = item["movie"]
-   itemsChecked.add(utf8(item["title"]) + " - " + str(item["releaseYear"]))
-   if (item["title"].lower()!=IN["name"].lower()): continue
-   if (not checkYear(item["releaseYear"], IN["year"])): 
-       print ("roviget(): Wrong year %s" % (item["releaseYear"]))
-       return IN
-   id = [item["ids"]["cosmoId"], item["ids"]["movieId"]]
-   try: 
-     for el in item["directors"]:
-        director = ", " + el["name"]
-     director = director[2:]
-   except Exception as err: 
-     print ("roviget(): Can't process director " + str(err))
-   try:         
-      cast = rovigetcast(item["cast"])
-   except:
-      cast = []
-   try:         
-      synopsis = "%s - By %s" % (item["synopsis"]["text"], item["synopsis"]["author"])
-   except:
-      synopsis = ""
-   synopsis = synopsis.replace("[", "<") # get rid of [...] elements
-   synopsis = synopsis.replace("]", ">")
-   p = re.compile("<[^>]+>")
-   synopsis = re.sub(p, "", synopsis)
-   break
-
- if (id==""):
-    itemsChecked = list(itemsChecked)
-    itemsChecked.sort()
-    print ("roviget(): Nothing found. Checked: %s" % (str(itemsChecked)))
-    return IN
- 
- IN["idrovi"] = copy.deepcopy(id)
-
- lcast = 0
- if ("cast" in IN):    lcast = len(IN["cast"])
- if (len(cast)>lcast): IN["cast"] = copy.deepcopy(cast)
-
- ldir = 0
- if ("director" in IN):   ldir = len(IN["director"])
- if (len(director)>ldir): IN["director"] = director
-
- lsyn = 0
- if ("synopsis" in IN):   ldir = len(IN["synopsis"])
- if (len(synopsis)>lsyn): IN["synopsis"] = synopsis
-
- print ("roviget(): OK")
- return IN
-#----------------------------------------------------------------------------------------------------
 # Remove items in IN["urlrev"] with unresolved links
 def checkLinks(IN):
 
@@ -263,7 +286,7 @@ def checkLinks(IN):
 # Check that certain entries are in IN and have proper format
 def checkEntries(IN, new):
  if (new):
-    allowed = set(["created", "year", "name", "urlwik", "urlimdb", "urlrev"])
+    allowed = set(["created", "year", "name", "urlwik", "urlimdb", "urltmdb", "urlrev"])
     present = set(list(IN.keys()))
     extras  = present - allowed
     if (len(extras)>0):
@@ -274,9 +297,6 @@ def checkEntries(IN, new):
        for el in extras: del IN[el]
            
  unfilled = []
- for el in ["idrovi"]:
-    if (not el in IN): 
-       unfilled.append(el)
      
  OK = True
  # Check that these are lists of [string, string] pairs
@@ -294,7 +314,12 @@ def checkEntries(IN, new):
     for el_ in IN[el]:
         if (not el_.__class__.__name__=="list"):
            print ("movinfo.checkEntries: Wrong %s" % (el))
-           pprint.pprint(el_)
+           pprint.pprint(IN[el])
+           OK = False
+           continue
+        if (len(el_)!=2):
+           print ("movinfo.checkEntries: Wrong %s" % (el))
+           pprint.pprint(IN[el])
            OK = False
            continue
         str = el_[0].__class__.__name__=="str" or el_[0].__class__.__name__=="unicode"
@@ -335,12 +360,12 @@ def rmComments(IN):
 #----------------------------------------------------------------------------------------------------
 def extract(fname):
  try:
-   F   = open(fname, "r")
-   F_  = " " + F.read() + " "
-   F_  = utf8(F_)
+   F   = open(fname, "r", encoding='utf8')
+   #print("==01==>" + F.read())
+   F_  = " " + utf8(F.read()) + " "
    F.close()
    if (not("<!--info" in F_) or not("<!--dscj" in F_)):   
-       print("extract: can't extract *dscj.txt from " + fname)
+       print("extract(): Can't extract *dscj.txt from " + fname)
        return
 	   
    start = F_.find("<!--dscj") + len("<!--dscj")
@@ -348,23 +373,23 @@ def extract(fname):
    dscj  = F_[start:end].strip()
    
    fnamej = fname.replace("info", "dscj")
-   FW    = open(fnamej, "w")
+   FW    = open(fnamej, "w", encoding='utf8')
    FW.write(dscj)
    FW.close()
  except Exception as err: 
-   print ("extract: failed %s err=%s" % (fname, err))
+   print ("extract(): Failed %s err=%s" % (fname, err))
    return 
    
- print("extract: created %s from %s" % (fnamej, fname))
+ print("extract(): Created %s from %s" % (fnamej, fname))
  return  
 #----------------------------------------------------------------------------------------------------
 # Descriptor in the file fname => IN dictionary
 def getDesc(fname, new):
 
  try:
-   F   = open(fname)
-   F_  = " " + F.read() + " "
-   F_  = utf8(F_)
+   F   = open(fname, "r", encoding='utf8')
+   #print("==02==>" + F.read())
+   F_  = " " + utf8(F.read()) + " "
    # get json descriptor
    if ("<!--info" in F_): 
       F_  = F_.split("<!--info")
@@ -376,10 +401,14 @@ def getDesc(fname, new):
    #print (IN)
    #exit
  except:
-   print ("movinfo: Wrong JSON in %s" % fname)
+   print ("getDesc(): Wrong JSON in %s" % fname)
    return {}
- if (not "name" in IN or not "year" in IN):
-   print ("movinfo: No movie name/year in %s" % fname)
+ if (not "urlimdb" in IN and not "tmdb" in IN):
+   print ("getDesc(: No urlimdb/ultmdb in %s" % fname)
+   return {}
+ ok = ("urlimdb" in IN and IN["urlimdb"]) or ("urltmdb" in IN and IN["urltmdb"]) 
+ if (not ok):
+   print ("getDesc(: empty %s" % fname)
    return {}
  
  [OK, IN] = checkEntries(IN, new)
@@ -427,6 +456,8 @@ def putDesc(fname, IN, env):
         if (el[1]!=""): cast = cast + " as <b>" + el[1] + "</b>, "
         else:           cast = cast + ", "
     cast = "<b>Cast:</b> %s\n" % (cast[0:len(cast)-2])
+    cast = cast.replace(", \n", "\n")
+    #print("===>" + cast + str(cast.endswith(", \n")))
  INkeys = INkeys - set(["cast"])
 
  rev = "" # reviews links
@@ -480,21 +511,20 @@ def putDesc(fname, IN, env):
  fdscj = fname.replace("info.txt", "dscj.txt")
  if (env and os.path.exists(fdscj)):
     try: 
-     F   = open(fdscj)
+     F   = open(fdscj, "r", encoding='utf8')
      F_  = F.read()
      if ("<!--dscj" in F_):
         IN_ = IN_ + F_
         print ("putDesc(): Appended " + fdscj)
-     else: 
-         print ("putDesc(): no envelope in " + fdscj)
+     else: print ("putDesc(): No envelope in " + fdscj)
     except Exception as err: 
-     print ("putDesc(): %s not found" % (fdscj))
+           print ("putDesc(): %s not found" % (fdscj))
  IN_ = utf8(IN_)
  
  # write the prepared descriptor to *info.txt
  
  shutil.copyfile(fname, fname+"._bak")
- F   = open(fname, "w")
+ F   = open(fname, "w", encoding='utf8')
  codecFail = False
  try: F.write(IN_)
  except Exception as err:
@@ -515,32 +545,36 @@ def putDesc(fname, IN, env):
     os.utime(fname, (t, t))
 
  # Check unusable entries
- unused = list(INkeys - set(["idrovi", "created", "urlrevrm"]))
- if (len(unused)>0):   print ("movinfo: Warning. Unusable entries %s" % (unused))
- if ("created" in IN): print ("movinfo: Created " + IN["created"])
+ unused = list(INkeys - set(["created", "urlrevrm"]))
+ if (len(unused)>0):   print ("putDesc(): Warning. Unusable entries %s" % (unused))
+ if ("created" in IN): print ("putDesc(): Created " + IN["created"])
 
  return
 #----------------------------------------------------------------------------------------------------
-# if newDesc=True,  create new Movie Descriptor using info from IMDB/omdb, Rovi
+# if newDesc=True,  create new Movie Descriptor using info from IMDB/tmdb
 # if newDesc=False, update Movie Descriptor using its updated json Descriptor 
 def procDesc(fname, newDesc, linkCheck, env):
  
  Res = getDesc(fname, newDesc)
- if (not "name" in Res or not "year" in Res): return
- name = Res["name"]
- year = Res["year"]
+ if (not "urlimdb" in Res and not"urltmdb" in Res): 
+    print ("procDesc(): No urlimdb/urltmdb in " + fname)
+    return
+ urlimdb = Res.get("urlimdb", "")
+ urltmdb = Res.get("urltmdb", "")
+ 
  if (newDesc):
     try: 
        fnamebak = fname.replace(".txt", ".bak")
        shutil.copy2(fname, fnamebak)
     except Exception as err:
-       print ("movinfo: Failed to create " + fnamebak)
-    if (not "created" in Res):
-       now = time
-       Res["created"] = now.strftime("%Y-%m-%d")
-    Res = omdbget(Res)
-    Res = roviget(Res)
-     
+       print ("procDesc(): Failed to create " + fnamebak)
+    #Res = omdbget(Res)
+    #print("===>" + Res["created"])
+    Res = getTmdbData(urlimdb, urltmdb, cfg["TMDB_API_KEY"])
+    #pprint.pprint (Res)
+    Res = procTmdbData(Res)
+ 
+ if (not Res): return 
  if (linkCheck): Res = checkLinks(Res)
  putDesc(fname, Res, env)
 
@@ -564,12 +598,13 @@ def getCfg():
 
   #print (cfg)
   issues = []
-  if ("ROVI_SEARCH_KEY" not in cfg):    issues.append("ROVI_SEARCH_KEY")
-  if ("ROVI_SEARCH_SECRET" not in cfg): issues.append("ROVI_SEARCH_SECRET")
+  #if ("ROVI_SEARCH_KEY" not in cfg):    issues.append("ROVI_SEARCH_KEY")
+  #if ("ROVI_SEARCH_SECRET" not in cfg): issues.append("ROVI_SEARCH_SECRET")
+  if ("TMDB_API_KEY" not in cfg):       issues.append("TMDB_API_KEY")
   if ("OMDB_API_KEY" not in cfg):       issues.append("OMDB_API_KEY")
   
   if (len(issues)>0):
-      print ("movinfo: missing %s" % (str(issues)))
+      print ("getCfg(): Missing %s" % (str(issues)))
       exit()
  
   return
@@ -587,13 +622,16 @@ def setDesc(desc):
  # Create new desc using the current dir name
  cwd = os.getcwd().replace("\\", "/").split("/")[-1]
  p = re.compile("[^a-zA-Z0-9\.]")
- res = p.sub("", cwd) + "." + desc
-
- open(res, 'a').close()
+ fn = p.sub("", cwd) + "." + desc
+ jdesc = '{"urlimdb": "", "urltmdb": ""}' 
+ F = open(fn, "w", encoding='utf8')
+ try: F.write(jdesc)
+ except Exception as err:
+   print ("Failed setDesc(): " + str(err))
+ F.close()
+ print ("setDesc: no descriptor found, created empty " + fn)
  
- print ("setDesc: no descriptor found, created empty " + res)
- 
- return res # new desc created
+ return fn # new desc created
 #----------------------------------------------------------------------------------------------------
 def main():
   parser = argparse.ArgumentParser(description=help)
