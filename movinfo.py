@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3.9
 
 # Version: 02/13/2013 - initial creation
 # Version: 02/18/2013 - introduced descriptor processing and CLI
@@ -286,7 +286,7 @@ def checkLinks(IN):
 # Check that certain entries are in IN and have proper format
 def checkEntries(IN, new):
  if (new):
-    allowed = set(["created", "year", "name", "urlwik", "urlimdb", "urltmdb", "urlrev"])
+    allowed = set(["created", "year", "name", "urlwik", "urlyou", "urlimdb", "urltmdb", "urlrev"])
     present = set(list(IN.keys()))
     extras  = present - allowed
     if (len(extras)>0):
@@ -305,6 +305,7 @@ def checkEntries(IN, new):
        IN[el] = copy.deepcopy([  
            ["", ""], ["", ""], ["", ""]
        ])
+       print("checkEntries(): added " + el)
        continue
     if (not IN[el].__class__.__name__=="list"):
        print ("movinfo.checkEntries: Wrong %s" % (el))
