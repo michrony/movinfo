@@ -431,11 +431,12 @@ def procAtag(IN):
 def putDesc(fname, IN, env):
 
  INkeys = set(list(IN.keys()))
+ INkeys = INkeys - set(["name", "year"])
 
- HeaderYear = IN["year"]
+ HeaderYear = "";
+ if ("year" in IN): HeaderYear = IN["year"]
  if (HeaderYear.__class__.__name__ == "list"): HeaderYear = HeaderYear[0]
  Header = "%s (%s)" % (IN["name"], HeaderYear)
- INkeys = INkeys - set(["name", "year"])
 
  dir = "" # director
  if ("director" in IN): dir = "<b>Director:</b> %s\n" % (IN["director"])
