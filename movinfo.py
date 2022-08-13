@@ -109,11 +109,12 @@ def getTmdbData(urlimdb, urltmdb, tmdbkey):
  reqCrew = "https://api.themoviedb.org/3/movie/%s/credits?api_key=%s" % (id, tmdbkey)
  
  print ("getTmdbData(): stage 1 - try " + id)
+ resp = None 
  try: resp, resMain = httplib2.Http().request(reqMain)
  except: 
    print ("getTmdbData(): GET failed")
  status = ""
- if ("status" in resp): status = str(resp.status)
+ if (resp and "status" in resp): status = str(resp.status)
  if (status!="200"):
    print ("getTmdbData(): GET failed: " + status) 
    return False
@@ -577,6 +578,10 @@ def procDesc(fname, newDesc, linkCheck, env):
     Res = procTmdbData(Res)
  
  if (not Res): return 
+ if (not "name" in Res):
+    print("procDesc(): can't get name, try movinfo -n")
+    pprint.pprint(Res)
+    return
  if (linkCheck): Res = checkLinks(Res)
  putDesc(fname, Res, env)
 
