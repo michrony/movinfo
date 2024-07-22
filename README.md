@@ -1,6 +1,6 @@
 OS:             Win10
 
-Python Version: 3.9
+Python Version: 3.11.5
 
 usage: movinfo.py [-h] (-n | -u | -ue | -uxe) [-l]
 
