@@ -33,6 +33,7 @@
 # Version: 03/13/2021 - enabled extract() for -uxe
 # Version: 03/21/2021 - use encoding='utf8' for open, close
 # Version: 12/24/2021 - enable tmdb API by id instead of OMDB, ROVI
+# Version: 07/21/2024 - now movinfo -n allows to specify urlimdb, urlwik in *.info.txt
 
 # OMDB API: http://www.omdbapi.com/ https://www.patreon.com/bePatron?c=740003
 
@@ -83,7 +84,7 @@ def checkYear(y1, y2):
  
  return False
 #---------------------------------------------------------------
-def getTmdbData(urlimdb, urltmdb, tmdbkey):
+def getTmdbData(urlimdb, tmdbkey):
  if (not tmdbkey or type(tmdbkey)!=str):
     print ("getTmdbData(): wrong tmdbkey: " + str(tmdbkey))
     return False
@@ -94,17 +95,11 @@ def getTmdbData(urlimdb, urltmdb, tmdbkey):
  if ("/" in imdbId): imdbId = imdbId.split("/")[0]
  if ("?" in imdbId): imdbId = imdbId.split("?")[0]
 
- tmdbId = 0
- if (urltmdb and "//www" in urltmdb and "/movie/" in urltmdb):
-    tmdbId = urltmdb.split("/movie/")[1]
- if (tmdbId and "-" in tmdbId): tmdbId = tmdbId.split("-")[0]
- if (tmdbId and not tmdbId.isnumeric()): tmdbId = 0 
- if (not imdbId and not tmdbId):
-    print ("getTmdbData(): can't get imdbId, tmdbId from [%s,%s]" % (str(urlimdb), str(urltmdb)))
+ if (not imdbId):
+    print ("getTmdbData(): can't get imdbId from [%s]" % (str(urlimdb)))
     return False
 
  id = imdbId
- if (not id): id = tmdbId
  reqMain = "https://api.themoviedb.org/3/movie/%s?api_key=%s" % (id, tmdbkey)
  reqCrew = "https://api.themoviedb.org/3/movie/%s/credits?api_key=%s" % (id, tmdbkey)
  
@@ -298,29 +293,37 @@ def checkEntries(IN, new):
        for el in extras: del IN[el]
            
  unfilled = []
-     
+
+ w = ""
+ if ("urlwik" in IN and IN["urlwik"]):
+     w = IN["urlwik"]
+ if (not w.__class__.__name__=="str"): w = ""
+ if (w):
+     IN["urlwik"] = copy.deepcopy([
+           ["Film", w], ["", ""], ["", ""]
+     ])
  OK = True
  # Check that these are lists of [string, string] pairs
  for el in ["urlwik", "urlyou", "urlrev", "cast"]:
-    if (not el in IN): 
+    if (not el in IN or not IN[el]):
        IN[el] = copy.deepcopy([  
            ["", ""], ["", ""], ["", ""]
        ])
        print("checkEntries(): added " + el)
        continue
     if (not IN[el].__class__.__name__=="list"):
-       print ("movinfo.checkEntries: Wrong %s" % (el))
+       print ("movinfo.checkEntries(): Wrong %s" % (el))
        #pprint.pprint(In[el])
        OK = False
        continue
     for el_ in IN[el]:
         if (not el_.__class__.__name__=="list"):
-           print ("movinfo.checkEntries: Wrong %s" % (el))
+           print ("movinfo.checkEntries(): Wrong %s" % (el))
            pprint.pprint(IN[el])
            OK = False
            continue
         if (len(el_)!=2):
-           print ("movinfo.checkEntries: Wrong %s" % (el))
+           print ("movinfo.checkEntries(): Wrong %s" % (el))
            pprint.pprint(IN[el])
            OK = False
            continue
@@ -328,13 +331,13 @@ def checkEntries(IN, new):
         str = str and (el_[1].__class__.__name__=="str" or el_[1].__class__.__name__=="unicode") 
         if (len(el_)!=2 or not str):
            #print el_[0].__class__.__name__
-           print ("movinfo.checkEntries: Wrong %s" % (el))
+           print ("movinfo.checkEntries(): Wrong %s" % (el))
            pprint.pprint(el_)
            OK = False
            continue
 
  unfilled.sort()
- if (len(unfilled)>0 and not new): print ("movinfo: Warning. Missing/wrong entries %s" % (unfilled)) 
+ if (len(unfilled)>0 and not new): print ("movinfo.checkEntries(): Warning. Missing/wrong entries %s" % (unfilled))
 
  return [OK, IN]
 #----------------------------------------------------------------------------------------------------
@@ -387,7 +390,6 @@ def extract(fname):
 #----------------------------------------------------------------------------------------------------
 # Descriptor in the file fname => IN dictionary
 def getDesc(fname, new):
-
  try:
    F   = open(fname, "r", encoding='utf8')
    #print("==02==>" + F.read())
@@ -405,14 +407,10 @@ def getDesc(fname, new):
  except:
    print ("getDesc(): Wrong JSON in %s" % fname)
    return {}
- if (not "urlimdb" in IN and not "tmdb" in IN):
-   print ("getDesc(: No urlimdb/ultmdb in %s" % fname)
+ if (not "urlimdb" in IN):
+   print ("getDesc(): No urlimdb in %s" % fname)
    return {}
- ok = ("urlimdb" in IN and IN["urlimdb"]) or ("urltmdb" in IN and IN["urltmdb"]) 
- if (not ok):
-   print ("getDesc(: empty %s" % fname)
-   return {}
- 
+
  [OK, IN] = checkEntries(IN, new)
  if (not OK): return []
  if (not new): IN = rmComments(IN)
@@ -559,12 +557,13 @@ def putDesc(fname, IN, env):
 def procDesc(fname, newDesc, linkCheck, env):
  
  Res = getDesc(fname, newDesc)
- if (not "urlimdb" in Res and not"urltmdb" in Res): 
-    print ("procDesc(): No urlimdb/urltmdb in " + fname)
+ if (not "urlimdb" in Res):
+    print ("procDesc(): No urlimdb in " + fname)
     return
  urlimdb = Res.get("urlimdb", "")
- urltmdb = Res.get("urltmdb", "")
- 
+ urlwik  = Res.get("urlwik", "")
+ urlyou  = Res.get("urlyou", "")
+
  if (newDesc):
     try: 
        fnamebak = fname.replace(".txt", ".bak")
@@ -573,8 +572,7 @@ def procDesc(fname, newDesc, linkCheck, env):
        print ("procDesc(): Failed to create " + fnamebak)
     #Res = omdbget(Res)
     #print("===>" + Res["created"])
-    Res = getTmdbData(urlimdb, urltmdb, cfg["TMDB_API_KEY"])
-    #pprint.pprint (Res)
+    Res = getTmdbData(urlimdb, cfg["TMDB_API_KEY"])
     Res = procTmdbData(Res)
  
  if (not Res): return 
@@ -582,6 +580,9 @@ def procDesc(fname, newDesc, linkCheck, env):
     print("procDesc(): can't get name, try movinfo -n")
     pprint.pprint(Res)
     return
+ Res["urlimdb"] = urlimdb
+ Res["urlwik"]  = urlwik
+ Res["urlyou"]  = urlyou
  if (linkCheck): Res = checkLinks(Res)
  putDesc(fname, Res, env)
 
@@ -630,13 +631,13 @@ def setDesc(desc):
  cwd = os.getcwd().replace("\\", "/").split("/")[-1]
  p = re.compile("[^a-zA-Z0-9\.]")
  fn = p.sub("", cwd) + "." + desc
- jdesc = '{"urlimdb": "", "urltmdb": ""}' 
+ jdesc = '{"urlimdb": "", "urlwik": ""}'
  F = open(fn, "w", encoding='utf8')
  try: F.write(jdesc)
  except Exception as err:
    print ("Failed setDesc(): " + str(err))
  F.close()
- print ("setDesc: no descriptor found, created empty " + fn)
+ print ("setDesc(): no descriptor found, created empty " + fn)
  
  return fn # new desc created
 #----------------------------------------------------------------------------------------------------
@@ -659,12 +660,14 @@ def main():
   getCfg()
   
   fname = setDesc("info.txt")
-  print ("movinfo: using " + fname)
+  print ("movinfo.man(): using " + fname)
   
   dscj = fname.replace(".info.", ".dscj.")
   if (not os.path.exists(dscj)):
-     open(dscj, 'a').close()
-     print ("movinfo: created " + dscj)
+     F = open(dscj, 'w')
+     F.write("{}")
+     F.close()
+     print ("movinfo.main(): created empty " + dscj)
      return
 	 
   if (xenv):
