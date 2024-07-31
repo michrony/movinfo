@@ -1,4 +1,3 @@
-#!/usr/bin/python3.9
 
 # Version: 02/13/2013 - initial creation
 # Version: 02/18/2013 - introduced descriptor processing and CLI
@@ -35,8 +34,6 @@
 # Version: 12/24/2021 - enable tmdb API by id instead of OMDB, ROVI
 # Version: 07/21/2024 - now movinfo -n allows to specify urlimdb, urlwik in *.info.txt
 
-# OMDB API: http://www.omdbapi.com/ https://www.patreon.com/bePatron?c=740003
-
 import sys, os, platform, datetime, re, json, copy
 import shutil
 import time, hashlib
@@ -55,18 +52,34 @@ except ImportError:
 # pip install httplib2
 
 help = '''
-Create/update movie descriptor *.info.txt using info from IMDB/omdb, Rovi.
+Create/update movie descriptor *.info.txt using info from IMDB/TMDB.
 Movie descriptor includes json and ASCII envelop, envelope is built from json.
 After descriptor is created with -n option, json part can be updated manually. 
 Then ASCII envelope is compiled from json by -ue option.
 NOTE: Web service keys are kept in movinfo.json.
 '''
 #----------------------------------------------------------------------------------------------------
-# all symbols after x'80' => HTML encoding $#xxx;
+# All symbols after x'80' => HTML encoding $#xxx;
 def utf8(str): 
     if (hasattr(str, "decode")): return str.decode('utf-8').encode('ascii', 'xmlcharrefreplace')
     else: return str.encode('ascii', 'xmlcharrefreplace').decode('utf-8')
 #----------------------------------------------------------------------------------------------------
+# Set modified, access date time for fn. date is yyyy-mm-dd
+def setModDate(fn, date):
+ date = date.split("-")
+ if len(date)==3:
+    [y, m, d] = [int(date[0]), int(date[1]), int(date[2])]
+    t = datetime(y, m, d)
+    t = time.mktime(t.timetuple())
+    os.utime(fn, (t, t))
+
+ return
+# ----------------------------------------------------------------------------------------------------
+def getDescHead():
+    res = os.getcwd().replace("\\", "/").replace("_", "")
+    res = res.split("/")[-1]
+    return res
+# ----------------------------------------------------------------------------------------------------------
 # Check if y1 from the response matches with y2 in the descriptor
 # y1 can be int or string
 # y2 can be int or list of ints: 2000 or [2000, 2005, 2010]
@@ -205,54 +218,9 @@ def procTmdbData(IN):
  out["cast"] = cast
  now = datetime.now().strftime("%Y-%m-%d")
  out["created"] = IN[0].get("created", now)
+
  return out
-#------------------------------------
-def omdbget(IN):
 
- name  = IN["name"]
- year  = IN["year"]
- keys = ["urlimdb", "director", "synopsis", "name", "year"]
- N    = len(keys)
- for el in keys:
-     if (el in IN): N = N-1
- if (N==0): return IN # all data already in IN
-
- REQ   = "http://www.omdbapi.com/?t=%s&apikey=%s"
- myREQ = REQ % (quote(name), cfg["OMDB_API_KEY"])
- try: resp, res = httplib2.Http().request(myREQ)
- except: 
-   print ("omdbget(): GET failed for %s" % (name))
-   return IN
-
- try:
-   res = json.loads(res)
- except: 
-   print ("omdbget(): Wrong response for %s" % (name))
-   return IN
-
- #pprint.pprint(res)
- if ("Error" in res or not checkYear(res["Year"], year)):
-   print ("omdbget(): Not found %s" % (name))
-   return IN 
-
- actors = []
- if ("Actors" in res):
-   actors_ = res["Actors"].split(", ")
-   for el in actors_: actors.append([el, ""])
-   
- # results => OUT
- OUT = copy.deepcopy(IN)
- #pprint.pprint(res)
- if (not "urlimdb" in OUT and "imdbID" in res): OUT["urlimdb"]  = "http://www.imdb.com/title/" + res["imdbID"]
- if (not "director"  in OUT and "Director" in res):  OUT["director"] = res["Director"]
- if (not "synopsis" in OUT and "Plot" in res):  OUT["synopsis"] = res["Plot"]
- if (not "name" in OUT and "Title" in res):     OUT["name"]     = res["Title"]
- if (not "year" in OUT):                        OUT["year"]     = year
- if (not "cast" in OUT):                        OUT["cast"]     = actors
-
- #pprint.pprint(res) 
- print ("omdbget(): OK")
- return OUT
 #----------------------------------------------------------------------------------------------------
 # Remove items in IN["urlrev"] with unresolved links
 def checkLinks(IN):
@@ -366,7 +334,6 @@ def rmComments(IN):
 def extract(fname):
  try:
    F   = open(fname, "r", encoding='utf8')
-   #print("==01==>" + F.read())
    F_  = " " + utf8(F.read()) + " "
    F.close()
    if (not("<!--info" in F_) or not("<!--dscj" in F_)):   
@@ -537,18 +504,12 @@ def putDesc(fname, IN, env):
     shutil.copyfile(fname + "._bak", fname)
  os.remove(fname + "._bak")
  
- # set access time to created
- cr = IN["created"].split("-")
- if len(cr)>1:
-    [y, m, d] = [int(cr[0]), int(cr[1]), int(cr[2])]
-    t = datetime(y, m, d)
-    t = time.mktime(t.timetuple())
-    os.utime(fname, (t, t))
+ setModDate(fname, IN["created"])
 
  # Check unusable entries
  unused = list(INkeys - set(["created", "urlrevrm"]))
  if (len(unused)>0):   print ("putDesc(): Warning. Unusable entries %s" % (unused))
- if ("created" in IN): print ("putDesc(): Created " + IN["created"])
+ if ("created" in IN): print ("putDesc(): Created %s (%s)" % (fname, IN["created"]))
 
  return
 #----------------------------------------------------------------------------------------------------
@@ -558,7 +519,7 @@ def procDesc(fname, newDesc, linkCheck, env):
  
  Res = getDesc(fname, newDesc)
  if (not "urlimdb" in Res):
-    print ("procDesc(): No urlimdb in " + fname)
+    print ("procDesc(): no urlimdb in " + fname)
     return
  urlimdb = Res.get("urlimdb", "")
  urlwik  = Res.get("urlwik", "")
@@ -570,8 +531,6 @@ def procDesc(fname, newDesc, linkCheck, env):
        shutil.copy2(fname, fnamebak)
     except Exception as err:
        print ("procDesc(): Failed to create " + fnamebak)
-    #Res = omdbget(Res)
-    #print("===>" + Res["created"])
     Res = getTmdbData(urlimdb, cfg["TMDB_API_KEY"])
     Res = procTmdbData(Res)
  
@@ -606,18 +565,15 @@ def getCfg():
 
   #print (cfg)
   issues = []
-  #if ("ROVI_SEARCH_KEY" not in cfg):    issues.append("ROVI_SEARCH_KEY")
-  #if ("ROVI_SEARCH_SECRET" not in cfg): issues.append("ROVI_SEARCH_SECRET")
-  if ("TMDB_API_KEY" not in cfg):       issues.append("TMDB_API_KEY")
-  if ("OMDB_API_KEY" not in cfg):       issues.append("OMDB_API_KEY")
-  
+  if ("TMDB_API_KEY" not in cfg):
+      issues.append("TMDB_API_KEY")
+
   if (len(issues)>0):
       print ("getCfg(): Missing %s" % (str(issues)))
       exit()
  
   return
 #----------------------------------------------------------------------------------------------------
-# desc can be info.txt or dscj.txt
 # Find matching descriptor in the current dir or create a new one
 def setDesc(desc):
  L = glob.glob("*" + desc)
@@ -627,24 +583,24 @@ def setDesc(desc):
    res = L[0]
    return res # got desc
    
- # Create new desc using the current dir name
- cwd = os.getcwd().replace("\\", "/").split("/")[-1]
- p = re.compile("[^a-zA-Z0-9\.]")
- fn = p.sub("", cwd) + "." + desc
+ # Create new desc
+ fn = getDescHead() + "." + desc
  jdesc = '{"urlimdb": "", "urlwik": ""}'
  F = open(fn, "w", encoding='utf8')
  try: F.write(jdesc)
  except Exception as err:
    print ("Failed setDesc(): " + str(err))
  F.close()
- print ("setDesc(): no descriptor found, created empty " + fn)
- 
- return fn # new desc created
+ print ("setDesc(): created empty " + fn)
+
+ exit()
+ #return fn
+
 #----------------------------------------------------------------------------------------------------
 def main():
   parser = argparse.ArgumentParser(description=help)
   group  = parser.add_mutually_exclusive_group(required=True)
-  group.add_argument('-n', action="store_true", help="Create new descriptor(s) using DB info with 'name', 'year' as movie seach arguments")
+  group.add_argument('-n', action="store_true", help="Create new descriptor(s) using DB info with 'name', 'year' as movie search arguments")
   group.add_argument('-u', action="store_true", help="Update existing descriptor")
   group.add_argument('-ue', action="store_true", help="Update existing descriptor with envelope for JSON")
   group.add_argument('-uxe', action="store_true", help="extract *dscj from envelope")
@@ -660,12 +616,12 @@ def main():
   getCfg()
   
   fname = setDesc("info.txt")
-  print ("movinfo.man(): using " + fname)
+  print ("movinfo.main(): using " + fname)
   
   dscj = fname.replace(".info.", ".dscj.")
   if (not os.path.exists(dscj)):
      F = open(dscj, 'w')
-     F.write("{}")
+     F.write("{}\n")
      F.close()
      print ("movinfo.main(): created empty " + dscj)
      return
