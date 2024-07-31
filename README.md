@@ -10,7 +10,7 @@ NOTE: Web service keys are kept in movinfo.json.
 <pre>
 options:
   -h, --help  show this help message and exit
-  -n          Create new descriptor(s) using DB info with 'name', 'year' as movie seach arguments
+  -n          Create new descriptor(s) using DB info with 'name', 'year' as movie search arguments
   -u          Update existing descriptor
   -ue         Update existing descriptor with envelope for JSON
   -uxe        extract *dscj from envelope
