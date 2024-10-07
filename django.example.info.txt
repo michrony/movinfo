@@ -1,3 +1,0 @@
-{
-   "urlimdb": "https://www.imdb.com/title/tt0060315/"
-}
