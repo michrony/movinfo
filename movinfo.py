@@ -33,6 +33,7 @@
 # Version: 12/24/2021 - enable tmdb API by id instead of OMDB, ROVI
 version = "07/21/2024"  # - now movinfo -n allows to specify urlimdb, urlwik in *.info.txt
 version = "09/24/2024"  # - enabled -dimg to download images from IMDB
+version = "10/22/2024"  # - minor fix of -n
 
 import os, sys, datetime, re, json, copy
 import platform
@@ -727,7 +728,7 @@ def getImdbImage(url):
     if (len(resDesc) < 3):
         print("getImdbImage(): can't get caption, imgUrl")
         return False
-    caption = resDesc[1].replace(" in " + title, "").replace(" and ", ", ").replace(" ,,", ",")
+    caption = resDesc[1].replace(" in " + title, "").replace(" and ", ", ").replace(",,", ",")
     imgUrl = resDesc[-1]
     if (not imgUrl.startswith("https://")):
         print("getImdbImage(): can't get caption, imgUrl")
@@ -802,7 +803,6 @@ def main():
         F.write("{}\n")
         F.close()
         print("movinfo: created empty " + dscj)
-        return
 
     if (xenv):
         extract(fname)
