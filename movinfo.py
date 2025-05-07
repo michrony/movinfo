@@ -286,10 +286,10 @@ def checkEntries(IN, new):
             ["Film", w], ["", ""], ["", ""]
         ])
     if ("urlimg" not in IN):
-        IN["urlimg"] = []
+        IN["urlimg"] = ["", "", "", "", "", "", "", "", "", ""]
     if (IN["urlimg"].__class__.__name__ != "list"):
         print("checkEntries(): urlimg was not list, replaced by []")
-        IN["urlimg"] = []
+        IN["urlimg"] = ["", "", "", "", "", "", "", "", "", ""]
     OK = True
     # Check that these are lists of [string, string] pairs
     for el in ["urlwik", "urlyou", "urlrev", "cast"]:
@@ -674,7 +674,7 @@ def iptcSet(fn, capt, spins):
 
 # ----------------------------------------------------------------------------------------------------
 def getImdbImage(url):
-    if (not url or not url.startswith("https://www.imdb.com/title/")):
+    if (not url or not url.startswith("https://")):
         print("getImdbImage(): skip this url: " + str(url))
         return False
     if ("/mediaviewer/rm" not in url):
